@@ -4,7 +4,20 @@ import time
 from datetime import datetime
 from typing import Dict, Optional, Callable
 
-from PyQt6 import QtCore, QtWidgets, QtGui
+# Use PyQt5 as requested
+from PyQt5 import QtCore, QtWidgets, QtGui
+
+# Map PyQt5 names to match the code's expected Qt6 style (if needed)
+Qt = QtCore.Qt
+AlignmentFlag = QtCore.Qt
+AspectRatioMode = QtCore.Qt
+TransformationMode = QtCore.Qt
+FrameShape = QtWidgets.QFrame
+
+from sensor_backend import SensorBackend
+from services.system_service import SystemService
+
+
 from sensor_backend import SensorBackend
 from services.system_service import SystemService
 
@@ -61,35 +74,35 @@ class SpotWidget(QtWidgets.QWidget):
         # 1. Available View
         self.avail_view = QtWidgets.QWidget()
         av_layout = QtWidgets.QVBoxLayout(self.avail_view)
-        av_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        av_layout.setAlignment(AlignmentFlag.AlignCenter)
         
         self.avail_icon = QtWidgets.QLabel()
-        self.avail_icon.setPixmap(QtGui.QPixmap("/home/mritunjay/Desktop/PapayaMeter/gui/static/available.png").scaled(120, 120, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation))
-        av_layout.addWidget(self.avail_icon, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.avail_icon.setPixmap(QtGui.QPixmap("/home/mritunjay/Desktop/PapayaMeter/gui/static/available.png").scaled(120, 120, AspectRatioMode.KeepAspectRatio, TransformationMode.SmoothTransformation))
+        av_layout.addWidget(self.avail_icon, alignment=AlignmentFlag.AlignCenter)
         
         av_text = QtWidgets.QLabel("AVAILABLE")
         av_text.setStyleSheet(f"color: {COLOR_ACCENT_GREEN}; font-size: 18px; font-weight: bold; margin-top: 10px;")
-        av_layout.addWidget(av_text, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        av_layout.addWidget(av_text, alignment=AlignmentFlag.AlignCenter)
         
         wait_text = QtWidgets.QLabel("Waiting for vehicle")
         wait_text.setStyleSheet(f"color: {COLOR_TEXT_GRAY}; font-size: 12px;")
-        av_layout.addWidget(wait_text, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        av_layout.addWidget(wait_text, alignment=AlignmentFlag.AlignCenter)
         
         self.start_btn = QtWidgets.QPushButton("START PARKING")
         self.start_btn.setStyleSheet(self._button_style(COLOR_ACCENT_GREEN))
         self.start_btn.clicked.connect(self._set_state_input)
-        av_layout.addWidget(self.start_btn, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        av_layout.addWidget(self.start_btn, alignment=AlignmentFlag.AlignCenter)
         
         self.content_stack.addWidget(self.avail_view)
 
         # 2. Input View
         self.input_view = QtWidgets.QWidget()
         in_layout = QtWidgets.QVBoxLayout(self.input_view)
-        in_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        in_layout.setAlignment(AlignmentFlag.AlignCenter)
         
         in_label = QtWidgets.QLabel("ENTER PLATE NUMBER")
         in_label.setStyleSheet(f"color: {COLOR_TEXT_WHITE}; font-size: 14px; font-weight: bold;")
-        in_layout.addWidget(in_label, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        in_layout.addWidget(in_label, alignment=AlignmentFlag.AlignCenter)
         
         self.plate_input = QtWidgets.QLineEdit()
         self.plate_input.setPlaceholderText("e.g. 7FGH-829")
@@ -105,28 +118,28 @@ class SpotWidget(QtWidgets.QWidget):
                 text-align: center;
             }}
         """)
-        in_layout.addWidget(self.plate_input, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        in_layout.addWidget(self.plate_input, alignment=AlignmentFlag.AlignCenter)
         
         self.confirm_btn = QtWidgets.QPushButton("CONFIRM")
         self.confirm_btn.setStyleSheet(self._button_style(COLOR_ACCENT_BLUE))
         self.confirm_btn.clicked.connect(self._start_session)
-        in_layout.addWidget(self.confirm_btn, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        in_layout.addWidget(self.confirm_btn, alignment=AlignmentFlag.AlignCenter)
         
         self.cancel_btn = QtWidgets.QPushButton("Cancel")
         self.cancel_btn.setStyleSheet("color: #e74c3c; border: none; background: transparent; font-size: 12px;")
         self.cancel_btn.clicked.connect(self._set_state_available)
-        in_layout.addWidget(self.cancel_btn, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        in_layout.addWidget(self.cancel_btn, alignment=AlignmentFlag.AlignCenter)
         
         self.content_stack.addWidget(self.input_view)
 
         # 3. Occupied View
         self.occ_view = QtWidgets.QWidget()
         oc_layout = QtWidgets.QVBoxLayout(self.occ_view)
-        oc_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        oc_layout.setAlignment(AlignmentFlag.AlignCenter)
         
         self.car_icon = QtWidgets.QLabel()
-        self.car_icon.setPixmap(QtGui.QPixmap("/home/mritunjay/Desktop/PapayaMeter/gui/static/car.png").scaled(200, 200, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation))
-        oc_layout.addWidget(self.car_icon, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.car_icon.setPixmap(QtGui.QPixmap("/home/mritunjay/Desktop/PapayaMeter/gui/static/car.png").scaled(200, 200, AspectRatioMode.KeepAspectRatio, TransformationMode.SmoothTransformation))
+        oc_layout.addWidget(self.car_icon, alignment=AlignmentFlag.AlignCenter)
         
         self.plate_display_box = QtWidgets.QWidget()
         self.plate_display_box.setStyleSheet(f"background-color: {COLOR_BG}; border: 1px solid {COLOR_BORDER}; border-radius: 8px; padding: 10px;")
@@ -135,13 +148,13 @@ class SpotWidget(QtWidgets.QWidget):
         self.plate_label.setStyleSheet("font-size: 18px; font-weight: bold;")
         self.type_label = QtWidgets.QLabel("🚙 SUV Detected")
         self.type_label.setStyleSheet(f"color: {COLOR_TEXT_GRAY}; font-size: 11px;")
-        pd_layout.addWidget(self.plate_label, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-        pd_layout.addWidget(self.type_label, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-        oc_layout.addWidget(self.plate_display_box, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        pd_layout.addWidget(self.plate_label, alignment=AlignmentFlag.AlignCenter)
+        pd_layout.addWidget(self.type_label, alignment=AlignmentFlag.AlignCenter)
+        oc_layout.addWidget(self.plate_display_box, alignment=AlignmentFlag.AlignCenter)
         
         self.timer_label = QtWidgets.QLabel("⏱️ 00:00:00")
         self.timer_label.setStyleSheet(f"color: {COLOR_ACCENT_GREEN}; font-size: 36px; font-weight: bold; margin-top: 20px;")
-        oc_layout.addWidget(self.timer_label, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        oc_layout.addWidget(self.timer_label, alignment=AlignmentFlag.AlignCenter)
         
         btn_row = QtWidgets.QHBoxLayout()
         self.add_time_btn = QtWidgets.QPushButton("+ ADD TIME")
@@ -160,20 +173,20 @@ class SpotWidget(QtWidgets.QWidget):
         # 4. Payment View
         self.pay_view = QtWidgets.QWidget()
         py_layout = QtWidgets.QVBoxLayout(self.pay_view)
-        py_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        py_layout.setAlignment(AlignmentFlag.AlignCenter)
         
         pay_title = QtWidgets.QLabel("SESSION ENDED")
         pay_title.setStyleSheet(f"color: {COLOR_ACCENT_BLUE}; font-size: 18px; font-weight: bold;")
-        py_layout.addWidget(pay_title, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        py_layout.addWidget(pay_title, alignment=AlignmentFlag.AlignCenter)
         
         self.summary_label = QtWidgets.QLabel("Total Time: 00:00:00")
         self.summary_label.setStyleSheet("font-size: 14px; margin-bottom: 20px;")
-        py_layout.addWidget(self.summary_label, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        py_layout.addWidget(self.summary_label, alignment=AlignmentFlag.AlignCenter)
         
         self.pay_btn = QtWidgets.QPushButton("PAY FOR PARKING")
         self.pay_btn.setStyleSheet(self._button_style("#f39c12"))
         self.pay_btn.clicked.connect(self._process_payment)
-        py_layout.addWidget(self.pay_btn, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        py_layout.addWidget(self.pay_btn, alignment=AlignmentFlag.AlignCenter)
         
         self.content_stack.addWidget(self.pay_view)
 
@@ -277,7 +290,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
         # Vertical Divider
         divider = QtWidgets.QFrame()
-        divider.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+        divider.setFrameShape(FrameShape.VLine)
         divider.setStyleSheet(f"background-color: {COLOR_BORDER}; min-width: 1px; max-width: 1px;")
         body_layout.addWidget(divider)
 
@@ -489,7 +502,7 @@ def main():
     app.setApplicationName("PapayaMeter")
     window = DashboardWindow()
     window.show()
-    sys.exit(app.exec())
+    sys.exit(app.exec_())
 
 if __name__ == "__main__":
     main()

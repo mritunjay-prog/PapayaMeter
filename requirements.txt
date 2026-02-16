@@ -1,4 +1,6 @@
-PyQt6==6.10.2
+# PyQt/Qt bindings should be installed via system package manager on Jetson/ARM
+# sudo apt-get install python3-pyqt5
+# PyQt6 or PyQt5
 pyqtgraph==0.14.0
 
 requests
@@ -6,4 +8,3 @@ configparser
 boto3
 pyserial
 paho-mqtt
-
