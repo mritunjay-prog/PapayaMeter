@@ -26,6 +26,74 @@ COLOR_TEXT_WHITE = "#ffffff"
 COLOR_TEXT_GRAY = "#8a97a5"
 COLOR_BORDER = "#2a323d"
 
+class LogManager(QtCore.QObject):
+    """Singleton log manager to capture and distribute logs."""
+    log_updated = QtCore.pyqtSignal(str)
+    
+    def __init__(self):
+        super().__init__()
+        self._logs = []
+        self._max_lines = 1000
+        # Use absolute path to ensure both CLI and GUI point to the same file
+        self.log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system.log")
+        self._last_size = 0
+        
+        # Initial pull to get existing history
+        self._pull_from_file()
+        
+        # Timer to tail the system.log file for CLI logs
+        self.pull_timer = QtCore.QTimer()
+        self.pull_timer.timeout.connect(self._pull_from_file)
+        self.pull_timer.start(500) # Check faster (every 0.5s)
+
+    def _pull_from_file(self):
+        if not os.path.exists(self.log_file):
+            return
+        
+        try:
+            current_size = os.path.getsize(self.log_file)
+            if current_size > self._last_size:
+                with open(self.log_file, "r") as f:
+                    f.seek(self._last_size)
+                    new_text = f.read()
+                    if new_text:
+                        self._logs.append(new_text)
+                        self.log_updated.emit(new_text)
+                self._last_size = current_size
+            elif current_size < self._last_size:
+                # File was reset
+                self._last_size = 0
+                self._logs = []
+        except:
+            pass
+
+    def write(self, text):
+        if text.strip():
+            timestamp = datetime.now().strftime("[%H:%M:%S]")
+            formatted_text = f"{timestamp} {text.strip()}\n"
+            
+            # Avoid duplicate if it's already being written to file by CLI
+            # But GUI logs won't be in file unless we write them
+            try:
+                with open(self.log_file, "a") as f:
+                    f.write(formatted_text)
+            except:
+                pass
+            
+            # Note: _pull_from_file will pick this up and emit it
+        sys.__stdout__.write(text)
+
+    def flush(self):
+        sys.__stdout__.flush()
+
+    def get_all_logs(self):
+        return "".join(self._logs)
+
+# Initialize global logger
+log_manager = LogManager()
+sys.stdout = log_manager
+sys.stderr = log_manager
+
 class SpotWidget(QtWidgets.QWidget):
     """Encapsulated widget for a single parking spot."""
     def __init__(self, name: str, id_code: str, parent=None):
@@ -166,25 +234,171 @@ class SpotWidget(QtWidgets.QWidget):
         
         self.content_stack.addWidget(self.occ_view)
 
-        # 4. Payment View
-        self.pay_view = QtWidgets.QWidget()
-        py_layout = QtWidgets.QVBoxLayout(self.pay_view)
-        py_layout.setAlignment(AlignmentFlag.AlignCenter)
+        # 4. Depart View (Screen 1)
+        self.depart_view = QtWidgets.QWidget()
+        dp_layout = QtWidgets.QVBoxLayout(self.depart_view)
+        dp_layout.setAlignment(AlignmentFlag.AlignCenter)
+        dp_layout.setSpacing(15)
+
+        self.depart_icon = QtWidgets.QLabel()
+        self.depart_icon.setFixedSize(100, 100)
+        self.depart_icon.setStyleSheet("""
+            background-color: #1a222c;
+            border-radius: 20px;
+            padding: 20px;
+            border: 1px solid #2a323d;
+        """)
+        self.depart_icon.setPixmap(QtGui.QPixmap("/home/mritunjay/Desktop/PapayaMeter/gui/static/car.png").scaled(60, 60, AspectRatioMode.KeepAspectRatio, TransformationMode.SmoothTransformation))
+        self.depart_icon.setAlignment(AlignmentFlag.AlignCenter)
+        dp_layout.addWidget(self.depart_icon, alignment=AlignmentFlag.AlignCenter)
+
+        dp_title = QtWidgets.QLabel("Ready to Depart?")
+        dp_title.setStyleSheet("color: white; font-size: 32px; font-weight: bold; margin-top: 20px;")
+        dp_layout.addWidget(dp_title, alignment=AlignmentFlag.AlignCenter)
+
+        dp_desc = QtWidgets.QLabel("Enter your ticket or select the button\nbelow to process your parking\npayment.")
+        dp_desc.setAlignment(AlignmentFlag.AlignCenter)
+        dp_desc.setStyleSheet(f"color: {COLOR_TEXT_GRAY}; font-size: 16px; line-height: 1.4;")
+        dp_layout.addWidget(dp_desc, alignment=AlignmentFlag.AlignCenter)
+
+        self.depart_btn = QtWidgets.QPushButton("Pay For Parking   >")
+        self.depart_btn.setFixedSize(380, 70)
+        self.depart_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.depart_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: white;
+                color: black;
+                border: none;
+                border-radius: 35px;
+                font-weight: bold;
+                font-size: 18px;
+                margin-top: 30px;
+            }}
+            QPushButton:hover {{
+                background-color: #e0e0e0;
+            }}
+        """)
+        self.depart_btn.clicked.connect(self._show_payment_details)
+        dp_layout.addWidget(self.depart_btn, alignment=AlignmentFlag.AlignCenter)
         
-        pay_title = QtWidgets.QLabel("SESSION ENDED")
-        pay_title.setStyleSheet(f"color: {COLOR_ACCENT_BLUE}; font-size: 18px; font-weight: bold;")
-        py_layout.addWidget(pay_title, alignment=AlignmentFlag.AlignCenter)
+        self.content_stack.addWidget(self.depart_view)
+
+        # 5. Payment Detail View (Screen 2)
+        self.pay_detail_view = QtWidgets.QWidget()
+        pd_v_layout = QtWidgets.QVBoxLayout(self.pay_detail_view)
+        pd_v_layout.setContentsMargins(20, 20, 20, 20)
+
+        # Back Button
+        self.back_btn = QtWidgets.QPushButton("←")
+        self.back_btn.setFixedSize(50, 50)
+        self.back_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.back_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #1a222c;
+                color: white;
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 12px;
+                font-size: 20px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: #2a323d;
+            }}
+        """)
+        self.back_btn.clicked.connect(self._on_back_clicked)
+        pd_v_layout.addWidget(self.back_btn)
         
-        self.summary_label = QtWidgets.QLabel("Total Time: 00:00:00")
-        self.summary_label.setStyleSheet("font-size: 14px; margin-bottom: 20px;")
-        py_layout.addWidget(self.summary_label, alignment=AlignmentFlag.AlignCenter)
+        pd_v_layout.addSpacing(20)
+
+        # Info Card
+        self.info_card = QtWidgets.QFrame()
+        self.info_card.setStyleSheet(f"background-color: #1a222c; border: 1px solid {COLOR_BORDER}; border-radius: 20px;")
+        ic_layout = QtWidgets.QVBoxLayout(self.info_card)
+        ic_layout.setContentsMargins(25, 25, 25, 25)
+
+        # Duration Row
+        dur_row = QtWidgets.QHBoxLayout()
+        self.clock_icon = QtWidgets.QLabel("🕒")
+        self.clock_icon.setFixedSize(40, 40)
+        self.clock_icon.setStyleSheet("background-color: #263238; border-radius: 20px; font-size: 18px;")
+        self.clock_icon.setAlignment(AlignmentFlag.AlignCenter)
         
-        self.pay_btn = QtWidgets.QPushButton("PAY FOR PARKING")
-        self.pay_btn.setStyleSheet(self._button_style("#f39c12"))
-        self.pay_btn.clicked.connect(self._process_payment)
-        py_layout.addWidget(self.pay_btn, alignment=AlignmentFlag.AlignCenter)
+        dur_texts = QtWidgets.QVBoxLayout()
+        dur_title = QtWidgets.QLabel("TOTAL DURATION")
+        dur_title.setStyleSheet(f"color: {COLOR_TEXT_GRAY}; font-size: 11px; font-weight: bold; letter-spacing: 1px;")
+        self.dur_value = QtWidgets.QLabel("00h 00m")
+        self.dur_value.setStyleSheet("color: white; font-size: 24px; font-weight: bold;")
+        dur_texts.addWidget(dur_title)
+        dur_texts.addWidget(self.dur_value)
         
-        self.content_stack.addWidget(self.pay_view)
+        dur_row.addWidget(self.clock_icon)
+        dur_row.addLayout(dur_texts)
+        dur_row.addStretch()
+        ic_layout.addLayout(dur_row)
+
+        # Separator
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(FrameShape.HLine)
+        sep.setStyleSheet(f"background-color: {COLOR_BORDER}; min-height: 1px; max-height: 1px; margin: 15px 0;")
+        ic_layout.addWidget(sep)
+
+        # Amount Row
+        amt_row = QtWidgets.QHBoxLayout()
+        amt_texts = QtWidgets.QVBoxLayout()
+        amt_title = QtWidgets.QLabel("AMOUNT DUE")
+        amt_title.setStyleSheet(f"color: {COLOR_TEXT_GRAY}; font-size: 11px; font-weight: bold; letter-spacing: 1px;")
+        self.amt_value = QtWidgets.QLabel("$ 0.00")
+        self.amt_value.setStyleSheet("color: white; font-size: 42px; font-weight: bold;")
+        amt_texts.addWidget(amt_title)
+        amt_texts.addWidget(self.amt_value)
+        
+        billing_badge = QtWidgets.QLabel("● Billed at $4.25/hr")
+        billing_badge.setStyleSheet(f"""
+            background-color: #263238;
+            color: #3498db;
+            padding: 5px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+        """)
+        
+        amt_row.addLayout(amt_texts)
+        amt_row.addStretch()
+        amt_row.addWidget(billing_badge, alignment=AlignmentFlag.AlignBottom)
+        ic_layout.addLayout(amt_row)
+
+        pd_v_layout.addWidget(self.info_card)
+        pd_v_layout.addStretch()
+
+        # NFC / Mobile Payment Icon
+        self.nfc_container = QtWidgets.QWidget()
+        nfc_layout = QtWidgets.QVBoxLayout(self.nfc_container)
+        
+        self.nfc_icon = QtWidgets.QLabel("📱") # Placeholder for icon
+        self.nfc_icon.setFixedSize(120, 120)
+        self.nfc_icon.setAlignment(AlignmentFlag.AlignCenter)
+        self.nfc_icon.setStyleSheet("""
+            QLabel {
+                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 #4c51f7, stop:1 transparent);
+                border-radius: 60px;
+                font-size: 50px;
+                color: white;
+            }
+        """)
+        
+        # Add ripples (simulated with stylesheet or multiple rings)
+        nfc_layout.addWidget(self.nfc_icon, alignment=AlignmentFlag.AlignCenter)
+        
+        # Clickable icon to simulate payment
+        self.nfc_btn = QtWidgets.QPushButton("Simulate NFC Tap")
+        self.nfc_btn.setStyleSheet("background: transparent; border: none; color: #3498db; font-size: 10px;")
+        self.nfc_btn.clicked.connect(self._process_payment)
+        nfc_layout.addWidget(self.nfc_btn, alignment=AlignmentFlag.AlignCenter)
+
+        pd_v_layout.addWidget(self.nfc_container)
+        pd_v_layout.addStretch()
+        
+        self.content_stack.addWidget(self.pay_detail_view)
 
         self.main_layout.addStretch()
 
@@ -235,12 +449,28 @@ class SpotWidget(QtWidgets.QWidget):
 
     def _stop_session(self):
         self.timer.stop()
-        self.summary_label.setText(f"Plate: {self.plate_number}\nTotal Time: {self._format_time(self.elapsed)}")
+        self.content_stack.setCurrentIndex(3) # Show Depart View (Screen 1)
+
+    def _show_payment_details(self):
+        # Calculate rates
+        hours = self.elapsed / 3600
+        rate = 4.25
+        total_price = max(0.00, hours * rate)
+        
+        # Update UI
+        h = int(self.elapsed // 3600)
+        m = int((self.elapsed % 3600) // 60)
+        self.dur_value.setText(f"{h:02d}h {m:02d}m")
+        self.amt_value.setText(f"$ {total_price:.2f}")
+        
+        self.content_stack.setCurrentIndex(4) # Show Payment Details (Screen 2)
+
+    def _on_back_clicked(self):
         self.content_stack.setCurrentIndex(3)
 
     def _process_payment(self):
         # Simulated payment
-        QtWidgets.QMessageBox.information(self, "Payment Successful", f"Payment processed for {self.plate_number}.\nThank you!")
+        QtWidgets.QMessageBox.information(self, "Payment Successful", f"Payment processed successfully.\nThank you!")
         self._set_state_available()
 
     def _format_time(self, seconds):
@@ -311,6 +541,118 @@ class LidarMonitorDialog(QtWidgets.QDialog):
             self.value_label.setStyleSheet(f"font-size: 64px; font-weight: bold; color: {COLOR_ACCENT_GREEN};")
             self.status_label.setText("✅ Status: RECEIVING DATA")
 
+class LogViewerDialog(QtWidgets.QDialog):
+    """A professional terminal-style log viewer."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("System Operation Logs")
+        self.resize(700, 500)
+        self.setStyleSheet(f"background-color: #0d1117; color: #c9d1d9; font-family: 'Consolas', 'Monaco', monospace;")
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Header
+        header = QtWidgets.QHBoxLayout()
+        title = QtWidgets.QLabel("📂 SYSTEM CONSOLE")
+        title.setStyleSheet("color: #58a6ff; font-weight: bold; font-size: 14px;")
+        header.addWidget(title)
+        
+        header.addStretch()
+        
+        self.clear_btn = QtWidgets.QPushButton("Clear Logs")
+        self.clear_btn.setStyleSheet("background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 4px 10px; font-size: 11px;")
+        self.clear_btn.clicked.connect(self._clear_logs)
+        header.addWidget(self.clear_btn)
+        
+        layout.addLayout(header)
+        
+        # Log Area
+        self.log_display = QtWidgets.QPlainTextEdit()
+        self.log_display.setReadOnly(True)
+        self.log_display.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #161b22;
+                border: 1px solid #30363d;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 12px;
+                line-height: 1.5;
+            }
+        """)
+        layout.addWidget(self.log_display)
+        
+        # Sync current logs
+        self.log_display.setPlainText(log_manager.get_all_logs())
+        self.log_display.verticalScrollBar().setValue(self.log_display.verticalScrollBar().maximum())
+        
+        # Connect to real-time updates
+        log_manager.log_updated.connect(self._append_log)
+
+    def _append_log(self, text):
+        self.log_display.insertPlainText(text)
+        self.log_display.verticalScrollBar().setValue(self.log_display.verticalScrollBar().maximum())
+
+    def _clear_logs(self):
+        log_manager._logs = []
+        self.log_display.clear()
+
+class CameraDialog(QtWidgets.QDialog):
+    """A dialog to display live feed from a USB camera (Left or Right)."""
+    def __init__(self, side="left", parent=None):
+        super().__init__(parent)
+        self.side = side
+        self.setWindowTitle(f"Live Camera Feed - {side.capitalize()}")
+        self.setFixedSize(680, 560)
+        self.setStyleSheet(f"background-color: {COLOR_BG}; color: white; border: 1px solid {COLOR_BORDER};")
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        
+        self.video_label = QtWidgets.QLabel(f"Starting {side.capitalize()} Camera...")
+        self.video_label.setAlignment(AlignmentFlag.AlignCenter)
+        self.video_label.setStyleSheet("background-color: black; border-radius: 10px;")
+        layout.addWidget(self.video_label)
+        
+        self.close_btn = QtWidgets.QPushButton(f"CLOSE {side.upper()} CAMERA")
+        self.close_btn.setStyleSheet(f"background-color: #e74c3c; color: white; font-weight: bold; padding: 10px; border-radius: 5px;")
+        self.close_btn.clicked.connect(self.close)
+        layout.addWidget(self.close_btn)
+        
+        self.update_timer = QtCore.QTimer()
+        self.update_timer.timeout.connect(self._fetch_frame)
+        
+        self.camera = None
+        
+    def showEvent(self, event):
+        super().showEvent(event)
+        try:
+            from utility.camera import CameraHandler
+            self.camera = CameraHandler(self.side)
+            if self.camera.start():
+                self.update_timer.start(33) # ~30 FPS
+            else:
+                self.video_label.setText(f"❌ ERROR: Could not open {self.side} camera")
+        except Exception as e:
+            self.video_label.setText(f"❌ ERROR: {e}")
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.update_timer.stop()
+        if self.camera:
+            self.camera.stop()
+            self.camera = None
+
+    def _fetch_frame(self):
+        if not self.camera: return
+        
+        frame = self.camera.get_frame()
+        if frame is not None:
+            h, w, ch = frame.shape
+            bytes_per_line = ch * w
+            q_img = QtGui.QImage(frame.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+            pixmap = QtGui.QPixmap.fromImage(q_img)
+            self.video_label.setPixmap(pixmap.scaled(self.video_label.width(), self.video_label.height(), AspectRatioMode.KeepAspectRatio))
+
 class DashboardWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -324,6 +666,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.system_service.start()
         
         self.lidar_monitor = LidarMonitorDialog(self)
+        self.log_viewer = LogViewerDialog(self)
+        self.camera_left = CameraDialog("left", self)
+        self.camera_right = CameraDialog("right", self)
+
+        self.backend.set_nfc_callback(self._handle_nfc_tap)
+        self.backend.set_air_callback(self._handle_air_update)
 
         self._init_ui()
         self._setup_shortcuts()
@@ -351,10 +699,45 @@ class DashboardWindow(QtWidgets.QMainWindow):
             elif spot.content_stack.currentIndex() == 1: # Input
                 spot._start_session()
         elif action == "stop":
-            if spot.content_stack.currentIndex() == 2: # Occupied
+            curr_idx = spot.content_stack.currentIndex()
+            if curr_idx == 2: # Occupied
                 spot._stop_session()
-            elif spot.content_stack.currentIndex() == 3: # Payment
+            elif curr_idx == 3: # Ready to Depart (Screen 1)
+                spot._show_payment_details()
+            elif curr_idx == 4: # Payment Details (Screen 2)
                 spot._process_payment()
+
+    def _handle_nfc_tap(self, data):
+        """Called when a physical NFC card is scanned."""
+        # Check if any spot is currently on the Payment Detail Screen (index 4)
+        for spot in [self.left_spot, self.right_spot]:
+            if spot.content_stack.currentIndex() == 4:
+                # Use QTimer to ensure thread safety when updating UI from background thread
+                QtCore.QTimer.singleShot(0, spot._process_payment)
+
+    def _handle_air_update(self, data):
+        """Update GUI when new Air Quality data arrives."""
+        pm25 = data.get("PM2.5", 0)
+        
+        # Determine status and color based on PM2.5
+        if pm25 < 12:
+            status, color = "Good", "#39ff5a"
+        elif pm25 < 35:
+            status, color = "Moderate", "#f1c40f"
+        else:
+            status, color = "Unhealthy", "#e74c3c"
+            
+        # UI update via thread-safe timer
+        QtCore.QTimer.singleShot(0, lambda: self.aqi_label.setText(f"🌬️ PM2.5: {pm25} {status}"))
+        QtCore.QTimer.singleShot(0, lambda: self.aqi_label.setStyleSheet(f"font-size: 14px; color: {color};"))
+        self._last_air_time = time.time()
+
+    def _check_air_quality(self):
+        """Check if sensor data has stopped coming and show NULL if so."""
+        if not hasattr(self, '_last_air_time') or (time.time() - self._last_air_time > 30):
+            # No update for 10 seconds or never updated
+            self.aqi_label.setText("🌬️ PM2.5: NULL")
+            self.aqi_label.setStyleSheet(f"font-size: 14px; color: {COLOR_TEXT_GRAY};")
 
     def _init_ui(self):
         central_widget = QtWidgets.QWidget()
@@ -434,8 +817,8 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.temp_label = QtWidgets.QLabel("🌡️ --°F")
         self.temp_label.setStyleSheet("font-size: 14px; margin-right: 15px;")
         
-        self.aqi_label = QtWidgets.QLabel("🌬️ AQT 38 Good")
-        self.aqi_label.setStyleSheet(f"font-size: 14px; color: {COLOR_ACCENT_GREEN};")
+        self.aqi_label = QtWidgets.QLabel("🌬️ PM2.5: NULL")
+        self.aqi_label.setStyleSheet(f"font-size: 14px; color: {COLOR_TEXT_GRAY};")
 
         layout.addWidget(self.temp_label)
         layout.addWidget(self.aqi_label)
@@ -536,6 +919,24 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.lidar_btn.clicked.connect(self.lidar_monitor.show)
         btn_layout.addWidget(self.lidar_btn)
 
+        self.logs_btn = QtWidgets.QPushButton("📋 System Logs")
+        self.logs_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.logs_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid {COLOR_TEXT_GRAY}; color: {COLOR_TEXT_WHITE}; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
+        self.logs_btn.clicked.connect(self.log_viewer.show)
+        btn_layout.addWidget(self.logs_btn)
+
+        self.cam_left_btn = QtWidgets.QPushButton("📷 Cam Left")
+        self.cam_left_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.cam_left_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid {COLOR_ACCENT_BLUE}; color: {COLOR_ACCENT_BLUE}; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
+        self.cam_left_btn.clicked.connect(self.camera_left.show)
+        btn_layout.addWidget(self.cam_left_btn)
+
+        self.cam_right_btn = QtWidgets.QPushButton("📷 Cam Right")
+        self.cam_right_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.cam_right_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid {COLOR_ACCENT_BLUE}; color: {COLOR_ACCENT_BLUE}; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
+        self.cam_right_btn.clicked.connect(self.camera_right.show)
+        btn_layout.addWidget(self.cam_right_btn)
+
         for text in ["⚙️ Hi-Contrast", "🔍 Enlarge"]:
             btn = QtWidgets.QPushButton(text)
             btn.setStyleSheet(f"background: transparent; border: 1px solid {COLOR_BORDER}; border-radius: 5px; padding: 5px 15px; font-size: 11px;")
@@ -574,10 +975,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
         try:
             readings = self.backend.get_latest_readings()
             temp = readings.get("Temperature")
-            if temp:
+            if temp and temp.value is not None:
                 # Convert Celsius to Fahrenheit
                 f_temp = (temp.value * 9/5) + 32
                 self.temp_label.setText(f"🌡️ {int(f_temp)}°F")
+            else:
+                self.temp_label.setText("🌡️ NULL")
             
             # Update Lidar Monitor if visible
             lidar = readings.get(LIDAR_SENSOR_NAME)
@@ -585,6 +988,9 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 self.lidar_monitor.update_value(lidar.value)
         except:
             pass
+
+        # Check Air Quality Status
+        self._check_air_quality()
 
         # Update Flag if country code changed
         country_code = stats["country_code"]
