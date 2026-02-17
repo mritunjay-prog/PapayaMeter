@@ -160,5 +160,4 @@ cython_debug/
 # Project specific
 config.properties
 lidar_data/
-nfc_data/
 debug_profiles.py

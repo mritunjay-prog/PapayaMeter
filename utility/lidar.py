@@ -27,19 +27,50 @@ def get_config():
     config.read(config_path)
     return config
 
-def build_request_packet(command_id):
-    # Header: Start byte (0xAA) [cite: 546]
-    # Flags: 16-bit. Payload length (ID byte = 1) and Read bit (0) [cite: 545, 547]
-    start_byte = 0xAA
-    flags = 1 << 1 # Payload length of 1, Read mode [cite: 545]
-    payload = [command_id]
+def build_request_packet(command_id, data=None):
+    """Packages a command packet with dynamic flags[cite: 541, 542]."""
+    payload = bytearray([command_id])
+    if data:
+        payload.extend(data)
     
-    packet_header = struct.pack('<BH', start_byte, flags)
-    packet_payload = bytearray(payload)
+    # Flags: Payload length in bits 6-15, Write bit is bit 0 [cite: 545]
+    # For a read command, write bit is 0.
+    flags = len(payload) << 6
+    
+    packet_header = bytearray([0xAA]) + struct.pack('<H', flags)
+    packet_payload = payload
     
     # Calculate CRC on everything except CRC itself [cite: 554]
     crc = create_crc(packet_header + packet_payload)
     return packet_header + packet_payload + struct.pack('<H', crc)
+
+def read_response(ser):
+    """Reads and validates the incoming packet dynamically[cite: 568, 587]."""
+    start_byte = ser.read(1)
+    if start_byte != b'\xAA':
+        return None
+    
+    flags_raw = ser.read(2)
+    if not flags_raw or len(flags_raw) < 2:
+        return None
+        
+    flags = struct.unpack('<H', flags_raw)[0]
+    payload_len = flags >> 6
+    
+    payload = ser.read(payload_len)
+    if not payload or len(payload) < payload_len:
+        return None
+        
+    crc_raw = ser.read(2)
+    if not crc_raw or len(crc_raw) < 2:
+        return None
+        
+    crc_received = struct.unpack('<H', crc_raw)[0]
+    
+    # Verify CRC [cite: 553]
+    if create_crc(b'\xAA' + flags_raw + payload) == crc_received:
+        return payload
+    return None
 
 def run_detector(callback=None):
     config = get_config()
@@ -92,13 +123,17 @@ def run_detector(callback=None):
     while True:
         try:
             ser.write(request)
-            # Response: Start(1) + Flags(2) + ID(1) + Data(2) + CRC(2) = 8 bytes
-            response = ser.read(8)
             
-            if len(response) == 8 and response[0] == 0xAA:
+            # Use dynamic response reader instead of fixed 8-byte read
+            res = read_response(ser)
+            
+            if res:
                 retry_count = 0  # Reset on success
-                # Distance is a signed 16-bit integer at index 4-5
-                distance_cm = struct.unpack('<h', response[4:6])[0]
+                
+                # Command 44 returns varied data. 
+                # According to SF000/B protocol, response payload starts with Command ID (1 byte)
+                # Distance is usually a 2-byte signed integer at index 1-2 [cite: 622]
+                distance_cm = struct.unpack('<h', res[1:3])[0]
                 
                 # -1.00 indicates out-of-range
                 out_of_range = False

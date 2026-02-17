@@ -8,3 +8,4 @@ configparser
 boto3
 pyserial
 paho-mqtt
+psutil

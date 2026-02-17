@@ -14,11 +14,7 @@ AspectRatioMode = QtCore.Qt
 TransformationMode = QtCore.Qt
 FrameShape = QtWidgets.QFrame
 
-from sensor_backend import SensorBackend
-from services.system_service import SystemService
-
-
-from sensor_backend import SensorBackend
+from sensor_backend import SensorBackend, LIDAR_SENSOR_NAME
 from services.system_service import SystemService
 
 # Color constants to match the image
@@ -217,12 +213,13 @@ class SpotWidget(QtWidgets.QWidget):
         self.content_stack.setCurrentIndex(0)
 
     def _set_state_input(self):
-        self.plate_input.clear()
-        self.content_stack.setCurrentIndex(1)
-        self.plate_input.setFocus()
+        # Bypass manual input, use default plate
+        self.plate_number = "7FGH-829"
+        self._start_session()
 
     def _start_session(self):
-        self.plate_number = self.plate_input.text().upper() or "UNKNOWN"
+        if not hasattr(self, 'plate_number') or not self.plate_number:
+            self.plate_number = "7FGH-829"
         self.plate_label.setText(self.plate_number)
         self.is_occupied = True
         self.status_label.setText("OCCUPIED")
@@ -252,6 +249,68 @@ class SpotWidget(QtWidgets.QWidget):
         s = int(seconds % 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
 
+class LidarMonitorDialog(QtWidgets.QDialog):
+    """A sleek dialog to monitor live LiDAR data."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("LiDAR Live Monitor")
+        self.setFixedSize(400, 300)
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+        self.setStyleSheet(f"background-color: {COLOR_BG}; color: {COLOR_TEXT_WHITE}; font-family: 'Inter', sans-serif;")
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        title = QtWidgets.QLabel("📡 LIVE LiDAR STREAM")
+        title.setStyleSheet(f"color: {COLOR_ACCENT_BLUE}; font-size: 16px; font-weight: bold; letter-spacing: 1px;")
+        layout.addWidget(title, alignment=QtCore.Qt.AlignCenter)
+        
+        layout.addStretch()
+        
+        self.value_label = QtWidgets.QLabel("----")
+        self.value_label.setStyleSheet("font-size: 64px; font-weight: bold; color: #8a97a5;")
+        layout.addWidget(self.value_label, alignment=QtCore.Qt.AlignCenter)
+        
+        self.unit_label = QtWidgets.QLabel("CENTIMETERS")
+        self.unit_label.setStyleSheet(f"color: {COLOR_TEXT_GRAY}; font-size: 12px; font-weight: bold;")
+        layout.addWidget(self.unit_label, alignment=QtCore.Qt.AlignCenter)
+        
+        layout.addStretch()
+        
+        self.status_label = QtWidgets.QLabel("Status: Waiting for data...")
+        self.status_label.setStyleSheet(f"background-color: {COLOR_SPOT_BG}; padding: 8px; border-radius: 5px; font-size: 11px;")
+        layout.addWidget(self.status_label, alignment=QtCore.Qt.AlignCenter)
+        
+        self.close_btn = QtWidgets.QPushButton("CLOSE MONITOR")
+        self.close_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_BORDER};
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 10px;
+                font-weight: bold;
+                font-size: 12px;
+                margin-top: 20px;
+            }}
+            QPushButton:hover {{
+                background-color: #3d4754;
+            }}
+        """)
+        self.close_btn.clicked.connect(self.close)
+        layout.addWidget(self.close_btn)
+
+    def update_value(self, value):
+        if value is None or value < 0:
+            self.value_label.setText("OOR")
+            self.value_label.setStyleSheet("font-size: 64px; font-weight: bold; color: #e74c3c;")
+            self.status_label.setText("⚠️ Status: OUT OF RANGE")
+        else:
+            self.value_label.setText(f"{int(value)}")
+            self.value_label.setStyleSheet(f"font-size: 64px; font-weight: bold; color: {COLOR_ACCENT_GREEN};")
+            self.status_label.setText("✅ Status: RECEIVING DATA")
+
 class DashboardWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -263,9 +322,39 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.backend = SensorBackend()
         self.system_service = SystemService()
         self.system_service.start()
+        
+        self.lidar_monitor = LidarMonitorDialog(self)
 
         self._init_ui()
+        self._setup_shortcuts()
         self._start_refresh_timers()
+
+    def _setup_shortcuts(self):
+        # Left Spot Shortcuts
+        self.lc_start = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+N"), self)
+        self.lc_start.activated.connect(lambda: self._handle_shortcut(self.left_spot, "start"))
+        
+        self.lc_stop = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+B"), self)
+        self.lc_stop.activated.connect(lambda: self._handle_shortcut(self.left_spot, "stop"))
+        
+        # Right Spot Shortcuts
+        self.rc_start = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+T"), self)
+        self.rc_start.activated.connect(lambda: self._handle_shortcut(self.right_spot, "start"))
+        
+        self.rc_stop = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+U"), self)
+        self.rc_stop.activated.connect(lambda: self._handle_shortcut(self.right_spot, "stop"))
+
+    def _handle_shortcut(self, spot, action):
+        if action == "start":
+            if spot.content_stack.currentIndex() == 0: # Available
+                spot._set_state_input()
+            elif spot.content_stack.currentIndex() == 1: # Input
+                spot._start_session()
+        elif action == "stop":
+            if spot.content_stack.currentIndex() == 2: # Occupied
+                spot._stop_session()
+            elif spot.content_stack.currentIndex() == 3: # Payment
+                spot._process_payment()
 
     def _init_ui(self):
         central_widget = QtWidgets.QWidget()
@@ -339,6 +428,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         avail_badge.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(avail_badge)
         layout.addStretch()
+
 
         # Right: Weather/Temp
         self.temp_label = QtWidgets.QLabel("🌡️ --°F")
@@ -439,6 +529,13 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
         # Right: Buttons
         btn_layout = QtWidgets.QHBoxLayout()
+        
+        self.lidar_btn = QtWidgets.QPushButton("📡 LiDAR Monitor")
+        self.lidar_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.lidar_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid {COLOR_ACCENT_BLUE}; color: {COLOR_ACCENT_BLUE}; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
+        self.lidar_btn.clicked.connect(self.lidar_monitor.show)
+        btn_layout.addWidget(self.lidar_btn)
+
         for text in ["⚙️ Hi-Contrast", "🔍 Enlarge"]:
             btn = QtWidgets.QPushButton(text)
             btn.setStyleSheet(f"background: transparent; border: 1px solid {COLOR_BORDER}; border-radius: 5px; padding: 5px 15px; font-size: 11px;")
@@ -481,6 +578,11 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 # Convert Celsius to Fahrenheit
                 f_temp = (temp.value * 9/5) + 32
                 self.temp_label.setText(f"🌡️ {int(f_temp)}°F")
+            
+            # Update Lidar Monitor if visible
+            lidar = readings.get(LIDAR_SENSOR_NAME)
+            if lidar and self.lidar_monitor.isVisible():
+                self.lidar_monitor.update_value(lidar.value)
         except:
             pass
 
