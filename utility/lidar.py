@@ -122,6 +122,7 @@ def run_detector(callback=None):
     request = build_request_packet(44)
     while True:
         try:
+            ser.reset_input_buffer() # Clear any stale data/garbage to ensure strict request-response sync
             ser.write(request)
             
             # Use dynamic response reader instead of fixed 8-byte read
