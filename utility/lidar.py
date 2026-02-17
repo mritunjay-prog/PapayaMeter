@@ -119,6 +119,31 @@ def run_detector(callback=None):
         return
 
     # Main data collection loop - only runs if hardware is available
+    
+    # 1. Handshake: Request Product Name twice [cite: 534, 535] (Logic from working lidar2.py)
+    try:
+        print("🤝 Performing handshake with SF000/B...")
+        handshake_req = build_request_packet(0)
+        for _ in range(2):
+            ser.write(handshake_req)
+            time.sleep(0.05)
+        
+        # Read response to clear buffer/validate
+        handshake_res = read_response(ser)
+        if handshake_res:
+            # First byte is command ID (0), rest is text
+            # Depending on response, usually index 1 onwards is the string
+            name = handshake_res[1:].decode('utf-8', errors='ignore').strip('\x00')
+            print(f"✅ Sensor Identified: {name}")
+        else:
+            print("⚠️ Handshake response timed out (common if device was sleeping), proceeding...")
+            
+    except Exception as e:
+        print(f"⚠️ Handshake warning: {e}")
+
+    # Clear buffer before starting main loop ensures we start fresh
+    ser.reset_input_buffer()
+
     request = build_request_packet(44)
     while True:
         try:
