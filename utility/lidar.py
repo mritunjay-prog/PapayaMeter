@@ -8,11 +8,12 @@ import os
 
 # CRC-16-CCITT calculation as specified in the SF000/B manual [cite: 559, 561]
 def create_crc(data):
+    """CRC-16-CCITT 0x1021 algorithm."""
     crc = 0
     for byte in data:
         code = (crc >> 8) & 0xFF
         code ^= byte & 0xFF
-        code ^= (code >> 4)
+        code ^= code >> 4
         crc = (crc << 8) & 0xFFFF
         crc ^= code
         code = (code << 5) & 0xFFFF
@@ -27,47 +28,41 @@ def get_config():
     config.read(config_path)
     return config
 
-def build_request_packet(command_id, data=None):
-    """Packages a command packet with dynamic flags[cite: 541, 542]."""
+def send_command(ser, command_id, data=None):
+    """Packages and sends a command packet."""
     payload = bytearray([command_id])
     if data:
         payload.extend(data)
     
-    # Flags: Payload length in bits 6-15, Write bit is bit 0 [cite: 545]
-    # For a read command, write bit is 0.
+    # Flags: Payload length in bits 6-15, Write bit is bit 0
     flags = len(payload) << 6
-    
     packet_header = bytearray([0xAA]) + struct.pack('<H', flags)
-    packet_payload = payload
     
-    # Calculate CRC on everything except CRC itself [cite: 554]
-    crc = create_crc(packet_header + packet_payload)
-    return packet_header + packet_payload + struct.pack('<H', crc)
+    full_packet_for_crc = packet_header + payload
+    crc = create_crc(full_packet_for_crc)
+    
+    packet = full_packet_for_crc + struct.pack('<H', crc)
+    ser.write(packet)
 
 def read_response(ser):
-    """Reads and validates the incoming packet dynamically[cite: 568, 587]."""
+    """Reads and validates the incoming packet."""
     start_byte = ser.read(1)
     if start_byte != b'\xAA':
         return None
     
     flags_raw = ser.read(2)
-    if not flags_raw or len(flags_raw) < 2:
-        return None
-        
+    if len(flags_raw) < 2: return None
     flags = struct.unpack('<H', flags_raw)[0]
     payload_len = flags >> 6
     
     payload = ser.read(payload_len)
-    if not payload or len(payload) < payload_len:
-        return None
-        
+    if len(payload) < payload_len: return None
+
     crc_raw = ser.read(2)
-    if not crc_raw or len(crc_raw) < 2:
-        return None
-        
+    if len(crc_raw) < 2: return None
     crc_received = struct.unpack('<H', crc_raw)[0]
     
-    # Verify CRC [cite: 553]
+    # Verify CRC
     if create_crc(b'\xAA' + flags_raw + payload) == crc_received:
         return payload
     return None
@@ -75,7 +70,7 @@ def read_response(ser):
 def run_detector(callback=None):
     config = get_config()
     
-    port = config.get('lidar', 'serial_port', fallback='COM3')
+    port = config.get('lidar', 'serial_port', fallback='/dev/papaya_lidar')
     baud = config.getint('lidar', 'baud_rate', fallback=115200)
     max_range = config.getint('lidar', 'max_range_cm', fallback=500)
     interval = config.getint('lidar', 'polling_interval_ms', fallback=100) / 1000.0
@@ -88,7 +83,7 @@ def run_detector(callback=None):
     retry_count = 0
     max_retries = 3
     last_error_time = 0
-    error_cooldown = 30  # Don't spam errors more than once every 30 seconds
+    error_cooldown = 30
 
     def send_error(error_desc):
         nonlocal last_error_time
@@ -103,65 +98,51 @@ def run_detector(callback=None):
             }
             callback(error_payload)
             last_error_time = current_time
-            print(f"⚠️ Error reported to ThingsBoard: {error_desc}")
-
-
+            print(f"⚠️ Error reported: {error_desc}")
 
     try:
         ser = serial.Serial(port, baud, timeout=0.1)
         print(f"✅ Connected to SF000/B on {port}")
-    except Exception as e:
-        error_msg = f"Failed to open serial port {port}: {e}"
-        print(f"⚠️ {error_msg}")
-        print(f"🔄 LiDAR hardware not available, skipping sensor data collection...")
-        send_error(error_msg)
-        # Return early - don't send simulated data, let main program continue
-        return
-
-    # Main data collection loop - only runs if hardware is available
-    
-    # 1. Handshake: Request Product Name twice [cite: 534, 535] (Logic from working lidar2.py)
-    try:
-        print("🤝 Performing handshake with SF000/B...")
-        handshake_req = build_request_packet(0)
+        
+        # 1. Handshake: Request Product Name twice (Logic from lidar2.py)
+        # This seems critical for initializing the session properly
         for _ in range(2):
-            ser.write(handshake_req)
+            send_command(ser, 0)
             time.sleep(0.05)
         
-        # Read response to clear buffer/validate
-        handshake_res = read_response(ser)
-        if handshake_res:
-            # First byte is command ID (0), rest is text
-            # Depending on response, usually index 1 onwards is the string
-            name = handshake_res[1:].decode('utf-8', errors='ignore').strip('\x00')
-            print(f"✅ Sensor Identified: {name}")
-        else:
-            print("⚠️ Handshake response timed out (common if device was sleeping), proceeding...")
-            
+        response = read_response(ser)
+        if response:
+            try:
+                name = response[1:].decode('utf-8', errors='ignore').strip('\x00')
+                print(f"✅ Sensor Identified: {name}")
+            except:
+                pass
+
     except Exception as e:
-        print(f"⚠️ Handshake warning: {e}")
+        error_msg = f"Failed to open/init serial port {port}: {e}"
+        print(f"⚠️ {error_msg}")
+        send_error(error_msg)
+        return
 
-    # Clear buffer before starting main loop ensures we start fresh
-    ser.reset_input_buffer()
-
-    request = build_request_packet(44)
+    # 2. Continuous Reading Loop
+    print("🚀 Starting LiDAR data collection...")
     while True:
         try:
-            ser.reset_input_buffer() # Clear any stale data/garbage to ensure strict request-response sync
-            ser.write(request)
-            
-            # Use dynamic response reader instead of fixed 8-byte read
+            # Request Distance Data (ID 44)
+            send_command(ser, 44)
             res = read_response(ser)
             
             if res:
-                retry_count = 0  # Reset on success
+                retry_count = 0
                 
-                # Command 44 returns varied data. 
-                # According to SF000/B protocol, response payload starts with Command ID (1 byte)
-                # Distance is usually a 2-byte signed integer at index 1-2 [cite: 622]
-                distance_cm = struct.unpack('<h', res[1:3])[0]
+                # Command 44 returns varied data; assuming default 'First return raw'
+                # The first byte is the ID, following bytes are the data
+                try:
+                    distance_cm = struct.unpack('<h', res[1:3])[0]
+                except Exception as ex:
+                    print(f"Error unpacking: {ex}")
+                    continue
                 
-                # -1.00 indicates out-of-range
                 out_of_range = False
                 if distance_cm == -100 or distance_cm <= 0:
                     out_of_range = True
@@ -196,16 +177,17 @@ def run_detector(callback=None):
                     callback(status)
             else:
                 retry_count += 1
-                print(f"⚠️ LiDAR Timeout/Invalid Data (Retry {retry_count}/{max_retries})")
-                if retry_count >= max_retries:
-                    send_error(f"No response from LiDAR module after {max_retries} attempts")
+                # Only warn if retries pile up, to avoid spamming tight loops
+                if retry_count % 10 == 0:
+                    print(f"⚠️ LiDAR Timeout/Invalid Data (Retry {retry_count})")
+                
+                if retry_count >= 50 and (retry_count % 50 == 0):
+                    send_error(f"No response from LiDAR module after {retry_count} attempts")
 
         except Exception as e:
             retry_count += 1
             print(f"❌ Serial Error: {e}")
-            if retry_count >= max_retries:
-                send_error(f"Serial communication error: {e}")
-            time.sleep(1) # Extra wait on physical/serial error
+            time.sleep(1)
 
         time.sleep(interval)
 
