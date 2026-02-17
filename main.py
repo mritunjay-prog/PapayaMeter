@@ -55,32 +55,38 @@ class LogManager(QtCore.QObject):
             if current_size > self._last_size:
                 with open(self.log_file, "r") as f:
                     f.seek(self._last_size)
-                    new_text = f.read()
-                    if new_text:
-                        self._logs.append(new_text)
-                        self.log_updated.emit(new_text)
+                    new_lines = f.readlines()
+                    for line in new_lines:
+                        # Only show logs that DID NOT come from the GUI process
+                        # to avoid double-printing what we just wrote
+                        if "[GUI]" not in line:
+                            self._logs.append(line)
+                            self.log_updated.emit(line)
                 self._last_size = current_size
             elif current_size < self._last_size:
                 # File was reset
                 self._last_size = 0
                 self._logs = []
-        except:
+        except Exception as e:
+            # Don't print error here or we'll loop!
             pass
 
     def write(self, text):
         if text.strip():
             timestamp = datetime.now().strftime("[%H:%M:%S]")
-            formatted_text = f"{timestamp} {text.strip()}\n"
+            # Tag GUI logs so we can distinguish them from CLI logs in the shared file
+            formatted_text = f"{timestamp} [GUI] {text.strip()}\n"
             
-            # Avoid duplicate if it's already being written to file by CLI
-            # But GUI logs won't be in file unless we write them
+            # 1. Update internal log and emit to UI immediately (merged view)
+            self._logs.append(formatted_text)
+            self.log_updated.emit(formatted_text)
+            
+            # 2. Persist to shared log file
             try:
                 with open(self.log_file, "a") as f:
                     f.write(formatted_text)
             except:
                 pass
-            
-            # Note: _pull_from_file will pick this up and emit it
         sys.__stdout__.write(text)
 
     def flush(self):
@@ -657,8 +663,11 @@ class DashboardWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PapayaMeter Dashboard")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(800, 480) 
         self.setStyleSheet(f"background-color: {COLOR_BG}; color: {COLOR_TEXT_WHITE}; font-family: 'Inter', sans-serif;")
+        
+        # Use showMaximized instead of FullScreen to keep Title Bar/Window controls visible
+        self.showMaximized()
 
         # Services
         self.backend = SensorBackend()
@@ -941,6 +950,17 @@ class DashboardWindow(QtWidgets.QMainWindow):
             btn = QtWidgets.QPushButton(text)
             btn.setStyleSheet(f"background: transparent; border: 1px solid {COLOR_BORDER}; border-radius: 5px; padding: 5px 15px; font-size: 11px;")
             btn_layout.addWidget(btn)
+
+        # Minimize and Close buttons
+        self.min_btn = QtWidgets.QPushButton("➖")
+        self.min_btn.setStyleSheet(f"background: #2c3e50; border-radius: 5px; padding: 5px 10px; font-size: 12px;")
+        self.min_btn.clicked.connect(self.showMinimized)
+        btn_layout.addWidget(self.min_btn)
+
+        self.close_btn = QtWidgets.QPushButton("❌")
+        self.close_btn.setStyleSheet(f"background: #c0392b; border-radius: 5px; padding: 5px 10px; font-size: 12px;")
+        self.close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(self.close_btn)
         
         layout.addLayout(btn_layout)
         return footer
