@@ -26,6 +26,9 @@ COLOR_TEXT_WHITE = "#ffffff"
 COLOR_TEXT_GRAY = "#8a97a5"
 COLOR_BORDER = "#2a323d"
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "gui", "static")
+
 class LogManager(QtCore.QObject):
     """Singleton log manager to capture and distribute logs."""
     log_updated = QtCore.pyqtSignal(str)
@@ -35,7 +38,7 @@ class LogManager(QtCore.QObject):
         self._logs = []
         self._max_lines = 1000
         # Use absolute path to ensure both CLI and GUI point to the same file
-        self.log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system.log")
+        self.log_file = os.path.join(BASE_DIR, "system.log")
         self._last_size = 0
         
         # Initial pull to get existing history
@@ -147,7 +150,7 @@ class SpotWidget(QtWidgets.QWidget):
         av_layout.setAlignment(AlignmentFlag.AlignCenter)
         
         self.avail_icon = QtWidgets.QLabel()
-        self.avail_icon.setPixmap(QtGui.QPixmap("/home/mritunjay/Desktop/PapayaMeter/gui/static/available.png").scaled(120, 120, AspectRatioMode.KeepAspectRatio, TransformationMode.SmoothTransformation))
+        self.avail_icon.setPixmap(QtGui.QPixmap(os.path.join(STATIC_DIR, "available.png")).scaled(120, 120, AspectRatioMode.KeepAspectRatio, TransformationMode.SmoothTransformation))
         av_layout.addWidget(self.avail_icon, alignment=AlignmentFlag.AlignCenter)
         
         av_text = QtWidgets.QLabel("AVAILABLE")
@@ -208,7 +211,7 @@ class SpotWidget(QtWidgets.QWidget):
         oc_layout.setAlignment(AlignmentFlag.AlignCenter)
         
         self.car_icon = QtWidgets.QLabel()
-        self.car_icon.setPixmap(QtGui.QPixmap("/home/mritunjay/Desktop/PapayaMeter/gui/static/car.png").scaled(200, 200, AspectRatioMode.KeepAspectRatio, TransformationMode.SmoothTransformation))
+        self.car_icon.setPixmap(QtGui.QPixmap(os.path.join(STATIC_DIR, "car.png")).scaled(200, 200, AspectRatioMode.KeepAspectRatio, TransformationMode.SmoothTransformation))
         oc_layout.addWidget(self.car_icon, alignment=AlignmentFlag.AlignCenter)
         
         self.plate_display_box = QtWidgets.QWidget()
@@ -254,7 +257,7 @@ class SpotWidget(QtWidgets.QWidget):
             padding: 20px;
             border: 1px solid #2a323d;
         """)
-        self.depart_icon.setPixmap(QtGui.QPixmap("/home/mritunjay/Desktop/PapayaMeter/gui/static/car.png").scaled(60, 60, AspectRatioMode.KeepAspectRatio, TransformationMode.SmoothTransformation))
+        self.depart_icon.setPixmap(QtGui.QPixmap(os.path.join(STATIC_DIR, "car.png")).scaled(60, 60, AspectRatioMode.KeepAspectRatio, TransformationMode.SmoothTransformation))
         self.depart_icon.setAlignment(AlignmentFlag.AlignCenter)
         dp_layout.addWidget(self.depart_icon, alignment=AlignmentFlag.AlignCenter)
 
@@ -701,6 +704,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.rc_stop = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+U"), self)
         self.rc_stop.activated.connect(lambda: self._handle_shortcut(self.right_spot, "stop"))
 
+        # NFC Simulation Shortcut (Credit Card Tap)
+        self.nfc_sim = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+E"), self)
+        self.nfc_sim.activated.connect(self._simulate_nfc_tap)
+
     def _handle_shortcut(self, spot, action):
         if action == "start":
             if spot.content_stack.currentIndex() == 0: # Available
@@ -715,6 +722,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 spot._show_payment_details()
             elif curr_idx == 4: # Payment Details (Screen 2)
                 spot._process_payment()
+
+    def _simulate_nfc_tap(self):
+        """Manually trigger the NFC tap logic via shortcut."""
+        self._handle_nfc_tap({"method": "shortcut"})
 
     def _handle_nfc_tap(self, data):
         """Called when a physical NFC card is scanned."""
@@ -901,7 +912,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         # Left: Language/Flags
         lang_layout = QtWidgets.QHBoxLayout()
         globe_icon = QtWidgets.QLabel()
-        globe_pixmap = QtGui.QPixmap("/home/mritunjay/Desktop/PapayaMeter/gui/static/globe.png")
+        globe_pixmap = QtGui.QPixmap(os.path.join(STATIC_DIR, "globe.png"))
         if not globe_pixmap.isNull():
             globe_icon.setPixmap(globe_pixmap.scaled(20, 20, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation))
         lang_layout.addWidget(globe_icon)
