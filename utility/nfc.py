@@ -19,7 +19,7 @@ def run_nfc_listener(callback=None):
     config = get_config()
     
     # Configuration from config.properties
-    SERIAL_PORT = config.get('nfc', 'serial_port', fallback='/dev/ttyACM0')
+    SERIAL_PORT = config.get('nfc', 'serial_port', fallback='/dev/papaya_nfc')
     BAUD_RATE = config.getint('nfc', 'baud_rate', fallback=115200)
     OUTPUT_DIR = config.get('nfc', 'output_dir', fallback='output')
     

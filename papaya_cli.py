@@ -16,6 +16,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from core.DeviceProvision import provision
 from utility.lidar import run_detector
 from services.telemetry_publisher import publish_telemetry, set_mqtt_token
+from services.ssh_service import SshService
+
 
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system.log")
 
@@ -80,8 +82,15 @@ def main():
     sys_log(f"🔑 Setting up MQTT with Access Token: {device_token}")
     set_mqtt_token(device_token)
 
-    # 3. Launch GUI after successful provisioning
+    # 3. Start SSH Management Service
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.properties")
+    ssh_service = SshService(config_path)
+    ssh_service.start()
+    sys_log("🛡️ Reverse SSH Service active.")
+
+    # 4. Launch GUI after successful provisioning
     gui_process = launch_gui()
+
 
     # 4. Start LiDAR collection and transmission
     sys_log("🚀 Starting LiDAR data collection...")
@@ -110,12 +119,15 @@ def main():
         if gui_process:
             sys_log("🔄 Closing GUI...")
             gui_process.terminate()
+        ssh_service.stop()
     except Exception as e:
         sys_log(f"❌ Critical error in detector: {e}")
         sys_log("🔄 But device provisioning was completed successfully!")
         if gui_process:
             sys_log("🔄 Closing GUI...")
             gui_process.terminate()
+        ssh_service.stop()
+
 
 if __name__ == "__main__":
     main()

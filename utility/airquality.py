@@ -60,7 +60,7 @@ def run_air_quality_listener(callback=None):
     config = get_config()
     
     # Configuration from config.properties
-    SERIAL_PORT = config.get('airquality', 'serial_port', fallback='/dev/ttyUSB2')
+    SERIAL_PORT = config.get('airquality', 'serial_port', fallback='/dev/papaya_air')
     BAUD_RATE = config.getint('airquality', 'baud_rate', fallback=1200)
     TIMEOUT = config.getint('airquality', 'timeout', fallback=1)
     OUTPUT_DIR = config.get('airquality', 'output_dir', fallback='output')
