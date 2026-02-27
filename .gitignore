@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+systemd/
+papaya-ssh.service
+services/ssh_service.py
+
+
 # C extensions
 *.so
 
