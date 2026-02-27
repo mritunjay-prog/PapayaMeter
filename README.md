@@ -144,3 +144,30 @@ Right now, `SensorBackend` generates smooth, simulated values so that the GUI is
 
 If you'd like, you can ask the AI assistant to extend `SensorBackend` to talk directly to your real sensor stack.
 
+---
+
+## 🛡️ Reverse SSH service (auto-start at boot)
+
+The SSH tunnel service (`services/ssh_service.py`) can be started automatically when the system boots using systemd.
+
+**One-time setup:**
+
+1. Edit `systemd/papaya-ssh.service` if your project path or username differs (update `User=`, `WorkingDirectory`, and `ExecStart` paths).
+
+2. Install and enable the service (requires sudo):
+
+   ```bash
+   sudo cp systemd/papaya-ssh.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable papaya-ssh.service
+   sudo systemctl start papaya-ssh.service
+   ```
+
+3. Check status: `sudo systemctl status papaya-ssh`
+
+**Useful commands:**
+
+- Start: `sudo systemctl start papaya-ssh`
+- Stop: `sudo systemctl stop papaya-ssh`
+- View logs: `journalctl -u papaya-ssh -f`
+

@@ -2,18 +2,22 @@ import subprocess
 import threading
 import time
 import os
-import configparser
-import logging
 
-# Setup basic logging to match the project's style
+# Hardcoded SSH tunnel settings (from config.properties [ssh])
+SSH_ENABLED = True
+SSH_HOST = "34.232.20.123"
+SSH_USER = "ubuntu"
+SSH_KEY_PATH = os.path.expanduser("/home/mritunjay/.ssh/id_rsa_thingsboard")
+SSH_REMOTE_PORT = "2222"
+
+
 class SshService:
     """
     Service to maintain a reverse SSH tunnel to a remote EC2 instance.
     This allows remote access to the device even if it's behind a NAT/firewall.
     """
     
-    def __init__(self, config_path):
-        self.config_path = config_path
+    def __init__(self, config_path=None):
         self._stop_event = threading.Event()
         self._thread = None
         self._process = None
@@ -48,44 +52,28 @@ class SshService:
     def _run_loop(self):
         while not self._stop_event.is_set():
             try:
-                config = configparser.ConfigParser()
-                config.read(self.config_path)
-                
-                if not config.has_section('ssh'):
-                    self._log("No [ssh] section in config. Waiting...", error=True)
-                    time.sleep(30)
-                    continue
-                    
-                enabled = config.getboolean('ssh', 'enabled', fallback=False)
-                if not enabled:
+                if not SSH_ENABLED:
                     time.sleep(60)
                     continue
-                    
-                host = config.get('ssh', 'host')
-                user = config.get('ssh', 'user')
-                key_path = config.get('ssh', 'key_path')
-                remote_port = config.get('ssh', 'remote_port', fallback='2222')
-                
-                key_path = os.path.expanduser(key_path)
-                
-                if not os.path.exists(key_path):
-                    self._log(f"SSH Key not found: {key_path}", error=True)
+
+                if not os.path.exists(SSH_KEY_PATH):
+                    self._log(f"SSH Key not found: {SSH_KEY_PATH}", error=True)
                     time.sleep(60)
                     continue
 
                 cmd = [
-                    'ssh', 
-                    '-N', 
-                    '-o', 'ServerAliveInterval=30', 
+                    'ssh',
+                    '-N',
+                    '-o', 'ServerAliveInterval=30',
                     '-o', 'ServerAliveCountMax=3',
                     '-o', 'ExitOnForwardFailure=yes',
                     '-o', 'StrictHostKeyChecking=no',
-                    '-R', f'{remote_port}:localhost:22',
-                    f'{user}@{host}',
-                    '-i', key_path
+                    '-R', f'{SSH_REMOTE_PORT}:localhost:22',
+                    f'{SSH_USER}@{SSH_HOST}',
+                    '-i', SSH_KEY_PATH
                 ]
-                
-                self._log(f"Initiating reverse SSH tunnel to {user}@{host}:{remote_port}...")
+
+                self._log(f"Initiating reverse SSH tunnel to {SSH_USER}@{SSH_HOST}:{SSH_REMOTE_PORT}...")
                 self._process = subprocess.Popen(
                     cmd, 
                     stdout=subprocess.PIPE, 
@@ -111,6 +99,21 @@ class SshService:
                 
             except Exception as e:
                 self._log(f"Unexpected error in SSH Service: {e}", error=True)
-                
+
             if not self._stop_event.is_set():
                 time.sleep(15)
+
+
+def main():
+    """Run SSH service as a standalone process."""
+    service = SshService()
+    service.start()
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        service.stop()
+
+
+if __name__ == "__main__":
+    main()
