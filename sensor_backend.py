@@ -52,20 +52,24 @@ class SensorBackend:
         self._air_latest: Dict[str, Any] | None = None
         self._temp_latest: Dict[str, Any] | None = None
         self._ultrasonic_latest: Dict[str, Any] | None = None
+        self._tamper_latest: Dict[str, Any] | None = None
         self._lidar_lock = threading.Lock()
         self._nfc_lock = threading.Lock()
         self._air_lock = threading.Lock()
         self._temp_lock = threading.Lock()
         self._ultrasonic_lock = threading.Lock()
+        self._tamper_lock = threading.Lock()
         self._lidar_thread: threading.Thread | None = None
         self._nfc_thread: threading.Thread | None = None
         self._air_thread: threading.Thread | None = None
         self._temp_thread: threading.Thread | None = None
         self._ultrasonic_thread: threading.Thread | None = None
+        self._tamper_thread: threading.Thread | None = None
         self._nfc_callback_external = None
         self._air_callback_external = None
         self._temp_callback_external = None
         self._ultrasonic_callback_external = None
+        self._tamper_callback_external = None
 
         if include_lidar:
             self._sensor_names.append(LIDAR_SENSOR_NAME)
@@ -75,6 +79,7 @@ class SensorBackend:
         self._start_air_thread()
         self._start_temp_thread()
         self._start_ultrasonic_thread()
+        self._start_tamper_thread()
 
     def set_nfc_callback(self, callback):
         self._nfc_callback_external = callback
@@ -87,6 +92,9 @@ class SensorBackend:
 
     def set_ultrasonic_callback(self, callback):
         self._ultrasonic_callback_external = callback
+
+    def set_tamper_callback(self, callback):
+        self._tamper_callback_external = callback
 
     def _nfc_callback(self, data: Dict[str, Any]) -> None:
         """Called by nfc run_nfc_listener with each new tap."""
@@ -115,6 +123,13 @@ class SensorBackend:
             self._ultrasonic_latest = dict(data)
         if self._ultrasonic_callback_external:
             self._ultrasonic_callback_external(data)
+
+    def _tamper_callback(self, data: Dict[str, Any]) -> None:
+        """Called by tamper run_tamper_monitor with each tamper event."""
+        with self._tamper_lock:
+            self._tamper_latest = dict(data)
+        if self._tamper_callback_external:
+            self._tamper_callback_external(data)
 
     def _lidar_callback(self, data: Dict[str, Any]) -> None:
         """Called by lidar run_detector with each new reading."""
@@ -188,6 +203,18 @@ class SensorBackend:
 
         self._ultrasonic_thread = threading.Thread(target=run, daemon=True)
         self._ultrasonic_thread.start()
+
+    def _start_tamper_thread(self) -> None:
+        """Run Tamper listener in a daemon thread."""
+        def run() -> None:
+            try:
+                from utility.tamper import run_tamper_monitor
+                run_tamper_monitor(callback=self._tamper_callback)
+            except Exception as e:
+                print(f"Tamper Thread Error: {e}")
+
+        self._tamper_thread = threading.Thread(target=run, daemon=True)
+        self._tamper_thread.start()
 
     def get_available_sensors(self) -> List[str]:
         """Return the list of available sensor names."""

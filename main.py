@@ -756,6 +756,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.backend.set_nfc_callback(self._handle_nfc_tap)
         self.backend.set_air_callback(self._handle_air_update)
         self.backend.set_ultrasonic_callback(self._handle_ultrasonic_callback)
+        self.backend.set_tamper_callback(self._handle_tamper_callback)
 
         self._ignored_sensors = {} # Store sensor_name: timestamp
         self._last_alert_time = 0
@@ -845,6 +846,16 @@ class DashboardWindow(QtWidgets.QMainWindow):
             # Show alert in UI via thread-safe timer
             msg = f"ALERT: Object is too near on {sensor_name}! ({distance:.1f} cm)"
             QtCore.QTimer.singleShot(0, lambda: self.notification_bar.show_alert(msg))
+
+    def _handle_tamper_callback(self, data):
+        """Called when a tamper event is detected by the hardware."""
+        msg = f"🚨 TAMPER DETECTED: {data.get('msg', 'Device moved or shaken')}"
+        # Detailed extra info for logging/debugging
+        details = f"Tilt: {data.get('tilt')}°, Gyro: {data.get('gyro')}dps, Lin: {data.get('linear')}g"
+        print(f"[GUI] {msg} ({details})")
+        
+        # Show alert in UI via thread-safe timer
+        QtCore.QTimer.singleShot(0, lambda: self.notification_bar.show_alert(msg))
 
     def _on_sensor_ignored(self):
         """Mark current active alert's sensor as ignored."""
