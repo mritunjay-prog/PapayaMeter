@@ -68,21 +68,32 @@ def run_ultrasonic_check(callback=None):
     config = get_config()
     
     sensors = []
-    # Identify sensors from config
-    for name in ['ultrasonic_front', 'ultrasonic_back']:
-        if config.has_section(name):
+    # Automatically identify all ultrasonic sections (e.g., [ultrasonic], [ultrasonic_front])
+    ultrasonic_sections = [s for s in config.sections() if s.startswith('ultrasonic')]
+    
+    if not ultrasonic_sections:
+        print("❌ No [ultrasonic*] sections found in config.properties.")
+        return
+
+    print(f"🔍 Found ultrasonic configurations: {ultrasonic_sections}")
+
+    for name in ultrasonic_sections:
+        try:
             port = config.get(name, 'serial_port')
             baud = config.getint(name, 'baud_rate', fallback=9600)
             threshold = config.getfloat(name, 'threshold_cm', fallback=30.0)
+            
             sensor = UltrasonicSensor(name, port, baud, threshold)
             if sensor.connect():
                 sensors.append(sensor)
+        except Exception as e:
+            print(f"⚠️ Error loading configuration for {name}: {e}")
 
     if not sensors:
-        print("❌ No ultrasonic sensors connected or configured.")
+        print("❌ No ultrasonic sensors could be connected. Check your serial ports andudev rules.")
         return
 
-    print(f"🚀 Starting ultrasonic distance monitoring (Thresholds: {[f'{s.name}: {s.threshold}cm' for s in sensors]})")
+    print(f"🚀 Monitoring {len(sensors)} sensor(s) (Thresholds: {[f'{s.name}: {s.threshold}cm' for s in sensors]})")
 
     try:
         while True:
