@@ -29,6 +29,77 @@ COLOR_BORDER = "#2a323d"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "gui", "static")
 
+class NotificationBar(QtWidgets.QFrame):
+    """A floating notification bar for critical alerts."""
+    ignored = QtCore.pyqtSignal()
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("NotificationBar")
+        self.setFixedHeight(60)
+        self.setFixedWidth(600)
+        self.setStyleSheet(f"""
+            #NotificationBar {{
+                background-color: #e74c3c;
+                border-radius: 12px;
+                border: 2px solid #c0392b;
+            }}
+            QLabel {{
+                color: white;
+                font-weight: bold;
+                font-size: 14px;
+            }}
+            QPushButton {{
+                background-color: rgba(255, 255, 255, 0.2);
+                color: white;
+                border: 1px solid white;
+                border-radius: 6px;
+                padding: 6px 15px;
+                font-size: 11px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(255, 255, 255, 0.3);
+            }}
+        """)
+        
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(20, 0, 20, 0)
+        
+        self.icon_label = QtWidgets.QLabel("🚨")
+        self.icon_label.setStyleSheet("font-size: 24px;")
+        layout.addWidget(self.icon_label)
+        
+        self.msg_label = QtWidgets.QLabel("CRITICAL ALERT: Object detected nearby!")
+        layout.addWidget(self.msg_label)
+        
+        layout.addStretch()
+        
+        self.ignore_btn = QtWidgets.QPushButton("IGNORE")
+        self.ignore_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.ignore_btn.clicked.connect(self.hide_notification)
+        self.ignore_btn.clicked.connect(self.ignored.emit)
+        layout.addWidget(self.ignore_btn)
+        
+        self.close_btn = QtWidgets.QPushButton("CLOSE")
+        self.close_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.close_btn.clicked.connect(self.hide_notification)
+        layout.addWidget(self.close_btn)
+        
+        self.hide() # Start hidden
+        
+    def show_alert(self, message):
+        self.msg_label.setText(message)
+        self.show()
+        # center relative to parent
+        if self.parent():
+            x = (self.parent().width() - self.width()) // 2
+            self.move(x, 20)
+            self.raise_()
+
+    def hide_notification(self):
+        self.hide()
+
 class LogManager(QtCore.QObject):
     """Singleton log manager to capture and distribute logs."""
     log_updated = QtCore.pyqtSignal(str)
@@ -684,6 +755,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
         self.backend.set_nfc_callback(self._handle_nfc_tap)
         self.backend.set_air_callback(self._handle_air_update)
+        self.backend.set_ultrasonic_callback(self._handle_ultrasonic_callback)
+
+        self._ignored_sensors = {} # Store sensor_name: timestamp
+        self._last_alert_time = 0
 
         self._init_ui()
         self._setup_shortcuts()
@@ -752,6 +827,37 @@ class DashboardWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(0, lambda: self.aqi_label.setStyleSheet(f"font-size: 14px; color: {color};"))
         self._last_air_time = time.time()
 
+    def _handle_ultrasonic_callback(self, data):
+        """Called when ultrasonic sensor data arrives from backend thread."""
+        sensor_name = data.get("sensor", "unknown")
+        is_alert = data.get("alert", False)
+        distance = data.get("distance_cm", 0)
+        
+        if is_alert:
+            # Check if this sensor is currently ignored (for 60 seconds)
+            if sensor_name in self._ignored_sensors:
+                if time.time() - self._ignored_sensors[sensor_name] < 60:
+                    return
+                else:
+                    # Ignore expired
+                    del self._ignored_sensors[sensor_name]
+            
+            # Show alert in UI via thread-safe timer
+            msg = f"ALERT: Object is too near on {sensor_name}! ({distance:.1f} cm)"
+            QtCore.QTimer.singleShot(0, lambda: self.notification_bar.show_alert(msg))
+
+    def _on_sensor_ignored(self):
+        """Mark current active alert's sensor as ignored."""
+        # Simple approach: since we only show one notification at a time, 
+        # let's find which sensor was alerting. 
+        # In a real app we'd pass the sensor name through the signal.
+        # For now, let's just ignore all for 60 seconds or we could parse the message.
+        msg = self.notification_bar.msg_label.text()
+        for sensor in ["ultrasonic_front", "ultrasonic_back", "ultrasonic"]:
+            if sensor in msg:
+                self._ignored_sensors[sensor] = time.time()
+                print(f"[GUI] Ignoring {sensor} alerts for 60 seconds.")
+
     def _check_air_quality(self):
         """Check if sensor data has stopped coming and show NULL if so."""
         if not hasattr(self, '_last_air_time') or (time.time() - self._last_air_time > 30):
@@ -765,6 +871,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
         main_layout = QtWidgets.QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+
+        # 0. Floating Notification Bar
+        self.notification_bar = NotificationBar(self)
+        self.notification_bar.ignored.connect(self._on_sensor_ignored)
 
         # 1. Header
         header = self._create_header()

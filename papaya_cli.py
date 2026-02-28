@@ -15,6 +15,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.DeviceProvision import provision
 from utility.lidar import run_detector
+from utility.ultrasonic import run_ultrasonic_check
 from services.telemetry_publisher import publish_telemetry, set_mqtt_token
 
 
@@ -47,6 +48,22 @@ def lidar_callback(data):
     # Send to background worker
     publish_telemetry(payload)
     sys_log(f"📤 Telemetry queued at {datetime.now().strftime('%H:%M:%S')}")
+
+def ultrasonic_callback(data):
+    """
+    Handle ultrasonic alerts in the CLI. 
+    Prints alerts to terminal and logs them.
+    """
+    is_alert = data.get("alert", False)
+    sensor_name = data.get("sensor", "unknown")
+    distance = data.get("distance_cm", 0)
+    
+    if is_alert:
+        # High visibility alert in terminal
+        sys_log(f"🚨 [PROXIMITY ALERT] Object too near on {sensor_name}! Distance: {distance:.1f} cm")
+    
+    # Optional: You could also publish this to ThingsBoard here
+    # publish_telemetry({"ts": int(time.time()*1000), "values": data})
 
 def launch_gui():
     """Launch the GUI application in a separate process"""
@@ -84,8 +101,16 @@ def main():
     # 3. Launch GUI after successful provisioning
     gui_process = launch_gui()
 
+    # 4. Start Ultrasonic Monitoring in a background thread
+    sys_log("🚀 Starting Ultrasonic proximity monitoring...")
+    us_thread = threading.Thread(
+        target=run_ultrasonic_check, 
+        kwargs={'callback': ultrasonic_callback},
+        daemon=True
+    )
+    us_thread.start()
 
-    # 4. Start LiDAR collection and transmission
+    # 5. Start LiDAR collection and transmission
     sys_log("🚀 Starting LiDAR data collection...")
     try:
         # This will run in a loop if hardware is available
