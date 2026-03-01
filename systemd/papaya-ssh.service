@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=mritunjay
-WorkingDirectory=/home/mritunjay/Desktop/PapayaMeter
-ExecStart=/usr/bin/python3 /home/mritunjay/Desktop/PapayaMeter/services/ssh_service.py
+User=nvidia
+WorkingDirectory=/home/nvidia/Desktop/PapayaMeter
+ExecStart=/usr/bin/python3 /home/nvidia/Desktop/PapayaMeter/services/ssh_service.py
 Restart=always
 RestartSec=10
 StandardOutput=journal

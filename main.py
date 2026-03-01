@@ -2,6 +2,7 @@ import sys
 import os
 import time
 from datetime import datetime
+import configparser
 from typing import Dict, Optional, Callable
 
 # Use PyQt5 as requested
@@ -29,15 +30,21 @@ COLOR_BORDER = "#2a323d"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "gui", "static")
 
+# Load configuration
+config = configparser.ConfigParser()
+config.read(os.path.join(BASE_DIR, 'config.properties'))
+HOURLY_RATE = config.getfloat('parking', 'hourly_rate', fallback=4.25)
+
 class NotificationBar(QtWidgets.QFrame):
     """A floating notification bar for critical alerts."""
     ignored = QtCore.pyqtSignal()
+    baseline_requested = QtCore.pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("NotificationBar")
         self.setFixedHeight(60)
-        self.setFixedWidth(600)
+        self.setFixedWidth(650)
         self.setStyleSheet(f"""
             #NotificationBar {{
                 background-color: #e74c3c;
@@ -61,6 +68,13 @@ class NotificationBar(QtWidgets.QFrame):
             QPushButton:hover {{
                 background-color: rgba(255, 255, 255, 0.3);
             }}
+            #BaselineBtn {{
+                background-color: #2ecc71;
+                border: 1px solid #27ae60;
+            }}
+            #BaselineBtn:hover {{
+                background-color: #27ae60;
+            }}
         """)
         
         layout = QtWidgets.QHBoxLayout(self)
@@ -74,22 +88,25 @@ class NotificationBar(QtWidgets.QFrame):
         layout.addWidget(self.msg_label)
         
         layout.addStretch()
+
+        self.baseline_btn = QtWidgets.QPushButton("SET AS BASELINE")
+        self.baseline_btn.setObjectName("BaselineBtn")
+        self.baseline_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.baseline_btn.clicked.connect(self.hide_notification)
+        self.baseline_btn.clicked.connect(self.baseline_requested.emit)
+        layout.addWidget(self.baseline_btn)
         
-        self.ignore_btn = QtWidgets.QPushButton("IGNORE")
+        self.ignore_btn = QtWidgets.QPushButton("IGNORE ALERT")
         self.ignore_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.ignore_btn.clicked.connect(self.hide_notification)
         self.ignore_btn.clicked.connect(self.ignored.emit)
         layout.addWidget(self.ignore_btn)
         
-        self.close_btn = QtWidgets.QPushButton("CLOSE")
-        self.close_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        self.close_btn.clicked.connect(self.hide_notification)
-        layout.addWidget(self.close_btn)
-        
         self.hide() # Start hidden
         
-    def show_alert(self, message):
+    def show_alert(self, message, show_baseline=False):
         self.msg_label.setText(message)
+        self.baseline_btn.setVisible(show_baseline)
         self.show()
         # center relative to parent
         if self.parent():
@@ -297,8 +314,23 @@ class SpotWidget(QtWidgets.QWidget):
         oc_layout.addWidget(self.plate_display_box, alignment=AlignmentFlag.AlignCenter)
         
         self.timer_label = QtWidgets.QLabel("⏱️ 00:00:00")
-        self.timer_label.setStyleSheet(f"color: {COLOR_ACCENT_GREEN}; font-size: 36px; font-weight: bold; margin-top: 20px;")
+        self.timer_label.setStyleSheet(f"color: {COLOR_ACCENT_GREEN}; font-size: 32px; font-weight: bold; margin-top: 10px;")
         oc_layout.addWidget(self.timer_label, alignment=AlignmentFlag.AlignCenter)
+
+        # Rate and Live Amount Display
+        self.live_billing_box = QtWidgets.QWidget()
+        self.live_billing_box.setStyleSheet(f"background-color: {COLOR_BG}; border: 1px solid {COLOR_BORDER}; border-radius: 12px; padding: 10px; margin-top: 5px;")
+        lb_layout = QtWidgets.QVBoxLayout(self.live_billing_box)
+        
+        self.hourly_rate_label = QtWidgets.QLabel(f"Rate: ${HOURLY_RATE:.2f} / hr")
+        self.hourly_rate_label.setStyleSheet(f"color: {COLOR_TEXT_GRAY}; font-size: 13px; font-weight: bold;")
+        lb_layout.addWidget(self.hourly_rate_label, alignment=AlignmentFlag.AlignCenter)
+        
+        self.live_amount_label = QtWidgets.QLabel("Amount: $ 0.00")
+        self.live_amount_label.setStyleSheet(f"color: {COLOR_ACCENT_BLUE}; font-size: 20px; font-weight: bold;")
+        lb_layout.addWidget(self.live_amount_label, alignment=AlignmentFlag.AlignCenter)
+        
+        oc_layout.addWidget(self.live_billing_box, alignment=AlignmentFlag.AlignCenter)
         
         btn_row = QtWidgets.QHBoxLayout()
         self.add_time_btn = QtWidgets.QPushButton("+ ADD TIME")
@@ -432,7 +464,7 @@ class SpotWidget(QtWidgets.QWidget):
         amt_texts.addWidget(amt_title)
         amt_texts.addWidget(self.amt_value)
         
-        billing_badge = QtWidgets.QLabel("● Billed at $4.25/hr")
+        billing_badge = QtWidgets.QLabel(f"● Billed at ${HOURLY_RATE:.2f}/hr")
         billing_badge.setStyleSheet(f"""
             background-color: #263238;
             color: #3498db;
@@ -526,6 +558,11 @@ class SpotWidget(QtWidgets.QWidget):
     def _update_timer(self):
         self.elapsed = time.time() - self.start_time
         self.timer_label.setText(f"⏱️ {self._format_time(self.elapsed)}")
+        
+        # Live amount calculation
+        hours = self.elapsed / 3600
+        live_amount = max(0.00, hours * HOURLY_RATE)
+        self.live_amount_label.setText(f"Amount: $ {live_amount:.2f}")
 
     def _stop_session(self):
         self.timer.stop()
@@ -534,8 +571,7 @@ class SpotWidget(QtWidgets.QWidget):
     def _show_payment_details(self):
         # Calculate rates
         hours = self.elapsed / 3600
-        rate = 4.25
-        total_price = max(0.00, hours * rate)
+        total_price = max(0.00, hours * HOURLY_RATE)
         
         # Update UI
         h = int(self.elapsed // 3600)
@@ -753,17 +789,21 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.camera_left = CameraDialog("left", self)
         self.camera_right = CameraDialog("right", self)
 
-        self.backend.set_nfc_callback(self._handle_nfc_tap)
-        self.backend.set_air_callback(self._handle_air_update)
-        self.backend.set_ultrasonic_callback(self._handle_ultrasonic_callback)
-        self.backend.set_tamper_callback(self._handle_tamper_callback)
-
         self._ignored_sensors = {} # Store sensor_name: timestamp
         self._last_alert_time = 0
 
         self._init_ui()
         self._setup_shortcuts()
         self._start_refresh_timers()
+
+        # Connect signals after UI is initialized
+        self.backend.set_nfc_callback(self._handle_nfc_tap)
+        self.backend.set_air_callback(self._handle_air_update)
+        self.backend.set_ultrasonic_callback(self._handle_ultrasonic_callback)
+        self.backend.set_tamper_callback(self._handle_tamper_callback)
+        
+        if hasattr(self, 'notification_bar'):
+            self.notification_bar.baseline_requested.connect(self._on_tamper_baseline_requested)
 
     def _setup_shortcuts(self):
         # Left Spot Shortcuts
@@ -849,25 +889,39 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
     def _handle_tamper_callback(self, data):
         """Called when a tamper event is detected by the hardware."""
+        # Check if tamper is currently ignored (for 60 seconds)
+        if "tamper" in self._ignored_sensors:
+            if time.time() - self._ignored_sensors["tamper"] < 60:
+                return
+            else:
+                del self._ignored_sensors["tamper"]
+
         msg = f"🚨 TAMPER DETECTED: {data.get('msg', 'Device moved or shaken')}"
         # Detailed extra info for logging/debugging
         details = f"Tilt: {data.get('tilt')}°, Gyro: {data.get('gyro')}dps, Lin: {data.get('linear')}g"
         print(f"[GUI] {msg} ({details})")
         
         # Show alert in UI via thread-safe timer
-        QtCore.QTimer.singleShot(0, lambda: self.notification_bar.show_alert(msg))
+        QtCore.QTimer.singleShot(0, lambda: self.notification_bar.show_alert(msg, show_baseline=True))
+
+    def _on_tamper_baseline_requested(self):
+        """Called when user wants to set the current state as the new baseline."""
+        print("[GUI] Recalibrating tamper baseline as requested by user.")
+        self.backend.recalibrate_tamper()
 
     def _on_sensor_ignored(self):
         """Mark current active alert's sensor as ignored."""
-        # Simple approach: since we only show one notification at a time, 
-        # let's find which sensor was alerting. 
-        # In a real app we'd pass the sensor name through the signal.
-        # For now, let's just ignore all for 60 seconds or we could parse the message.
         msg = self.notification_bar.msg_label.text()
+        # Handle ultrasonic sensors
         for sensor in ["ultrasonic_front", "ultrasonic_back", "ultrasonic"]:
             if sensor in msg:
                 self._ignored_sensors[sensor] = time.time()
                 print(f"[GUI] Ignoring {sensor} alerts for 60 seconds.")
+
+        # Handle tamper alerts
+        if "TAMPER" in msg:
+            self._ignored_sensors["tamper"] = time.time()
+            print(f"[GUI] Ignoring tamper alerts for 60 seconds.")
 
     def _check_air_quality(self):
         """Check if sensor data has stopped coming and show NULL if so."""

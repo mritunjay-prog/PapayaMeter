@@ -50,7 +50,7 @@ def angle(v1, v2):
     return math.degrees(math.acos(max(-1,min(1,dot/(n1*n2)))))
 
 # ---------------- Main Monitor ----------------
-def run_tamper_monitor(callback=None):
+def run_tamper_monitor(callback=None, recalibrate_event=None):
     config = get_config()
     
     # ---------------- I2C Configuration ----------------
@@ -74,6 +74,16 @@ def run_tamper_monitor(callback=None):
     linear_ths_g = config.getfloat('tamper', 'linear_threshold_g', fallback=0.12)
     cooldown_sec = config.getfloat('tamper', 'cooldown_sec', fallback=5.0)
 
+    def calibrate(bus, addr, outx_l_xl, sample_hz, dt):
+        print("Calibrating baseline... Please hold steady.")
+        bx = by = bz = 0
+        n_calib = int(1.0 * sample_hz) # 1 second calibration
+        for _ in range(n_calib):
+            ax, ay, az = read_accel(bus, addr, outx_l_xl)
+            bx += ax; by += ay; bz += az
+            time.sleep(dt)
+        return (bx/n_calib, by/n_calib, bz/n_calib)
+
     try:
         bus = SMBus(i2c_bus)
         
@@ -83,16 +93,8 @@ def run_tamper_monitor(callback=None):
         time.sleep(0.3)
 
         print(f"✅ Tamper monitoring started on I2C bus {i2c_bus}, addr {hex(addr)}")
-        print("Calibrating baseline... Please hold steady.")
         
-        bx = by = bz = 0
-        n_calib = int(1.0 * sample_hz) # 1 second calibration
-        for _ in range(n_calib):
-            ax, ay, az = read_accel(bus, addr, outx_l_xl)
-            bx += ax; by += ay; bz += az
-            time.sleep(dt)
-
-        baseline = (bx/n_calib, by/n_calib, bz/n_calib)
+        baseline = calibrate(bus, addr, outx_l_xl, sample_hz, dt)
         print(f"Calibration complete: {baseline}")
 
         gyro_window = deque(maxlen=window_size)
@@ -101,6 +103,16 @@ def run_tamper_monitor(callback=None):
         last_alert = 0
 
         while True:
+            # Check for recalibration request
+            if recalibrate_event and recalibrate_event.is_set():
+                print("♻️ Recalibrating baseline as requested...")
+                baseline = calibrate(bus, addr, outx_l_xl, sample_hz, dt)
+                print(f"New calibration complete: {baseline}")
+                recalibrate_event.clear()
+                # Clear windows to avoid false triggers after move
+                gyro_window.clear()
+                lin_window.clear()
+
             ax, ay, az = read_accel(bus, addr, outx_l_xl)
             gx, gy, gz = read_gyro(bus, addr, outx_l_g)
 

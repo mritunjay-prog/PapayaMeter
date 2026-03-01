@@ -7,7 +7,7 @@ import os
 SSH_ENABLED = True
 SSH_HOST = "34.232.20.123"
 SSH_USER = "ubuntu"
-SSH_KEY_PATH = os.path.expanduser("/home/mritunjay/.ssh/id_rsa_thingsboard")
+SSH_KEY_PATH = os.path.expanduser("/home/nvidia/.ssh/id_rsa_thingsboard")
 SSH_REMOTE_PORT = "2222"
 
 

@@ -59,6 +59,7 @@ class SensorBackend:
         self._temp_lock = threading.Lock()
         self._ultrasonic_lock = threading.Lock()
         self._tamper_lock = threading.Lock()
+        self._tamper_recalibrate_event = threading.Event()
         self._lidar_thread: threading.Thread | None = None
         self._nfc_thread: threading.Thread | None = None
         self._air_thread: threading.Thread | None = None
@@ -95,6 +96,10 @@ class SensorBackend:
 
     def set_tamper_callback(self, callback):
         self._tamper_callback_external = callback
+
+    def recalibrate_tamper(self):
+        """Request the tamper monitor to set its current state as the new baseline."""
+        self._tamper_recalibrate_event.set()
 
     def _nfc_callback(self, data: Dict[str, Any]) -> None:
         """Called by nfc run_nfc_listener with each new tap."""
@@ -209,7 +214,10 @@ class SensorBackend:
         def run() -> None:
             try:
                 from utility.tamper import run_tamper_monitor
-                run_tamper_monitor(callback=self._tamper_callback)
+                run_tamper_monitor(
+                    callback=self._tamper_callback, 
+                    recalibrate_event=self._tamper_recalibrate_event
+                )
             except Exception as e:
                 print(f"Tamper Thread Error: {e}")
 
