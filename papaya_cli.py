@@ -65,29 +65,66 @@ def ultrasonic_callback(data):
     # Optional: You could also publish this to ThingsBoard here
     # publish_telemetry({"ts": int(time.time()*1000), "values": data})
 
+def get_display_env():
+    """
+    Dynamically find the DISPLAY and XAUTHORITY from the currently running 
+    desktop session. This works even when called from an SSH session.
+    """
+    try:
+        # Find the PID of any process that has a DISPLAY set (e.g. the desktop session)
+        result = subprocess.run(
+            ["bash", "-c",
+             "for pid in /proc/*/environ; do "
+             "  strings $pid 2>/dev/null | grep -q '^DISPLAY=:' && echo $pid && break; "
+             "done"],
+            capture_output=True, text=True, timeout=5
+        )
+        proc_env_path = result.stdout.strip()
+        if not proc_env_path:
+            return {}
+        
+        # Read all env vars from that process
+        with open(proc_env_path, 'r', errors='replace') as f:
+            raw = f.read()
+        
+        env_vars = {}
+        for entry in raw.split('\x00'):
+            if '=' in entry:
+                k, _, v = entry.partition('=')
+                env_vars[k] = v
+        
+        display = env_vars.get("DISPLAY", "")
+        xauthority = env_vars.get("XAUTHORITY", "")
+        
+        found = {}
+        if display:
+            found["DISPLAY"] = display
+        if xauthority and os.path.exists(xauthority):
+            found["XAUTHORITY"] = xauthority
+        
+        return found
+    except Exception as e:
+        sys_log(f"⚠️ Could not auto-detect display env: {e}")
+        return {}
+
+
 def launch_gui():
     """Launch the GUI application in a separate process, rendering on the physical screen."""
     try:
         sys_log("🖥️ Launching PapayaMeter GUI...")
         
-        # Build environment with display settings for SSH sessions
+        # Build environment — start from current env and override display settings
         gui_env = os.environ.copy()
         
-        # Point to the physical display (the screen connected to the device)
-        gui_env["DISPLAY"] = ":0"
-        
-        # Set XAUTHORITY so the process has permission to draw on :0
-        # Common paths: ~/.Xauthority or /run/user/1000/gdm/Xauthority (for GDM)
-        xauth_candidates = [
-            os.path.expanduser("~/.Xauthority"),
-            "/run/user/1000/gdm/Xauthority",
-            "/home/mritunjay/.Xauthority",
-        ]
-        for xauth in xauth_candidates:
-            if os.path.exists(xauth):
-                gui_env["XAUTHORITY"] = xauth
-                sys_log(f"🔑 Using XAUTHORITY: {xauth}")
-                break
+        # Auto-detect DISPLAY and XAUTHORITY from the running desktop session
+        detected = get_display_env()
+        if detected:
+            gui_env.update(detected)
+            sys_log(f"🖥️ Using display: {detected.get('DISPLAY','?')} XAUTH: {detected.get('XAUTHORITY','none')}")
+        else:
+            # Fallback: try DISPLAY=:0 directly (works if xhost +local: was run)
+            gui_env["DISPLAY"] = ":0"
+            sys_log("⚠️ Could not auto-detect display, falling back to DISPLAY=:0")
 
         # Launch the GUI using the same Python interpreter
         gui_process = subprocess.Popen(
