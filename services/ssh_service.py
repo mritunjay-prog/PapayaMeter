@@ -2,13 +2,32 @@ import subprocess
 import threading
 import time
 import os
+import configparser
 
-# Hardcoded SSH tunnel settings (from config.properties [ssh])
-SSH_ENABLED = True
-SSH_HOST = "34.232.20.123"
-SSH_USER = "ubuntu"
-SSH_KEY_PATH = os.path.expanduser("/home/nvidia/.ssh/id_rsa_thingsboard")
-SSH_REMOTE_PORT = "2222"
+def get_config():
+    config = configparser.ConfigParser()
+    # Attempt to find config.properties in several likely locations
+    possible_paths = [
+        os.path.join(os.path.dirname(__file__), '..', 'config.properties'),
+        os.path.expanduser('~/Desktop/PapayaMeter/config.properties'),
+        'config.properties'
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            config.read(path)
+            return config
+            
+    return config
+
+# Load settings from config.properties
+config = get_config()
+SSH_ENABLED = config.getboolean('ssh', 'enabled', fallback=True)
+SSH_HOST = config.get('ssh', 'host', fallback="34.232.20.123")
+SSH_USER = config.get('ssh', 'user', fallback="ubuntu")
+# Dynamically resolve home directory for the SSH key
+SSH_KEY_PATH = os.path.expanduser(config.get('ssh', 'key_path', fallback="~/.ssh/id_rsa_thingsboard"))
+SSH_REMOTE_PORT = config.get('ssh', 'remote_port', fallback="2222")
 
 
 class SshService:

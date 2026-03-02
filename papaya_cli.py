@@ -66,11 +66,35 @@ def ultrasonic_callback(data):
     # publish_telemetry({"ts": int(time.time()*1000), "values": data})
 
 def launch_gui():
-    """Launch the GUI application in a separate process"""
+    """Launch the GUI application in a separate process, rendering on the physical screen."""
     try:
         sys_log("🖥️ Launching PapayaMeter GUI...")
+        
+        # Build environment with display settings for SSH sessions
+        gui_env = os.environ.copy()
+        
+        # Point to the physical display (the screen connected to the device)
+        gui_env["DISPLAY"] = ":0"
+        
+        # Set XAUTHORITY so the process has permission to draw on :0
+        # Common paths: ~/.Xauthority or /run/user/1000/gdm/Xauthority (for GDM)
+        xauth_candidates = [
+            os.path.expanduser("~/.Xauthority"),
+            "/run/user/1000/gdm/Xauthority",
+            "/home/mritunjay/.Xauthority",
+        ]
+        for xauth in xauth_candidates:
+            if os.path.exists(xauth):
+                gui_env["XAUTHORITY"] = xauth
+                sys_log(f"🔑 Using XAUTHORITY: {xauth}")
+                break
+
         # Launch the GUI using the same Python interpreter
-        gui_process = subprocess.Popen([sys.executable, "main.py"])
+        gui_process = subprocess.Popen(
+            [sys.executable, "main.py"],
+            env=gui_env,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
         sys_log("✅ GUI launched successfully!")
         return gui_process
     except Exception as e:

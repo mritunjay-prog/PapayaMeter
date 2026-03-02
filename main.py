@@ -1,13 +1,26 @@
-import sys
-import os
-import time
-from datetime import datetime
 import configparser
 from typing import Dict, Optional, Callable
+
+# === FIX: Prevent cv2 from conflicting with PyQt5 ===
+# This must happen BEFORE any other imports that might touch Qt or cv2
+import os
+import sys
+
+# Force PyQt5 to use its own plugins instead of cv2's conflicting ones
+venv_base = os.path.dirname(os.path.abspath(__file__))
+QT_PLUGINS_PATH = os.path.join(venv_base, 'venv', 'lib', 'python3.10', 'site-packages', 'PyQt5', 'Qt5', 'plugins')
+if os.path.exists(QT_PLUGINS_PATH):
+    os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = QT_PLUGINS_PATH
+
+# Disable cv2's internal Qt GUI support to prevent "xcb" loading errors
+# Let Qt decide the platform (xcb or wayland) but point to the correct plugin path
+os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
+# ==================================================
 
 # Use PyQt5 as requested
 from PyQt5 import QtCore, QtWidgets, QtGui
 
+# Map PyQt5 names to match the code's expected Qt6 style (if needed)
 # Map PyQt5 names to match the code's expected Qt6 style (if needed)
 Qt = QtCore.Qt
 AlignmentFlag = QtCore.Qt
@@ -15,8 +28,13 @@ AspectRatioMode = QtCore.Qt
 TransformationMode = QtCore.Qt
 FrameShape = QtWidgets.QFrame
 
+# Import time and datetime here after the fix
+import time
+from datetime import datetime
+
 from sensor_backend import SensorBackend, LIDAR_SENSOR_NAME
 from services.system_service import SystemService
+from services.database_service import get_db
 
 # Color constants to match the image
 COLOR_BG = "#12171e"
@@ -47,9 +65,9 @@ class NotificationBar(QtWidgets.QFrame):
         self.setFixedWidth(650)
         self.setStyleSheet(f"""
             #NotificationBar {{
-                background-color: #e74c3c;
-                border-radius: 12px;
-                border: 2px solid #c0392b;
+                background-color: #ff0000;
+                border-radius: 15px;
+                border: 4px solid #ffffff;
             }}
             QLabel {{
                 color: white;
@@ -104,15 +122,28 @@ class NotificationBar(QtWidgets.QFrame):
         
         self.hide() # Start hidden
         
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        # print(f"[GUI DEBUG] PaintEvent triggered for NotificationBar (Visible: {self.isVisible()})")
+
     def show_alert(self, message, show_baseline=False):
         self.msg_label.setText(message)
         self.baseline_btn.setVisible(show_baseline)
-        self.show()
-        # center relative to parent
+        
+        # Super-forceful visibility
+        self.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.FramelessWindowHint | QtCore.Qt.ToolTip)
+        
+        # Center relative to screen (since it is now a top-level ToolTip for testing)
         if self.parent():
-            x = (self.parent().width() - self.width()) // 2
-            self.move(x, 20)
-            self.raise_()
+            p_geom = self.parent().geometry()
+            x = p_geom.x() + (p_geom.width() - self.width()) // 2
+            y = p_geom.y() + 150
+            self.move(x, y)
+        
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        print(f"[GUI DEBUG] !! FORCED TOP-LEVEL SHOW_ALERT !! Msg: {message} at {self.pos()}")
 
     def hide_notification(self):
         self.hide()
@@ -186,17 +217,17 @@ class LogManager(QtCore.QObject):
     def get_all_logs(self):
         return "".join(self._logs)
 
-# Initialize global logger
-log_manager = LogManager()
-sys.stdout = log_manager
-sys.stderr = log_manager
+# Global logger placeholder
+log_manager = None
 
 class SpotWidget(QtWidgets.QWidget):
     """Encapsulated widget for a single parking spot."""
-    def __init__(self, name: str, id_code: str, parent=None):
+    def __init__(self, name: str, id_code: str, side: str = "left", parent=None):
         super().__init__(parent)
         self.spot_name = name
         self.id_code = id_code
+        self.camera_side = side
+        self.db_session_id = None
         self.is_occupied = False
         self.plate_number = ""
         self.start_time: Optional[float] = None
@@ -205,6 +236,11 @@ class SpotWidget(QtWidgets.QWidget):
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self._update_timer)
         self.timer.setInterval(1000)
+
+        # Camera logic
+        self.camera_handler = None
+        self.cam_timer = QtCore.QTimer()
+        self.cam_timer.timeout.connect(self._update_camera_frame)
 
         self._init_ui()
         self._set_state_available()
@@ -225,6 +261,24 @@ class SpotWidget(QtWidgets.QWidget):
         top_row.addStretch()
         top_row.addWidget(self.status_label)
         self.main_layout.addLayout(top_row)
+
+        # Camera Feed Placeholder (As seen in image)
+        self.camera_feed_label = QtWidgets.QLabel(f"{self.camera_side.capitalize()} Camera Feed")
+        self.camera_feed_label.setFixedSize(240, 180)
+        self.camera_feed_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.camera_feed_label.setStyleSheet(f"""
+            background-color: #f7f7f7;
+            border: 1px solid #dcdcdc;
+            border-radius: 4px;
+            color: #333333;
+            font-size: 14px;
+            font-weight: bold;
+        """)
+        
+        cam_row = QtWidgets.QHBoxLayout()
+        cam_row.addStretch()
+        cam_row.addWidget(self.camera_feed_label)
+        self.main_layout.addLayout(cam_row)
 
         self.main_layout.addStretch()
 
@@ -553,6 +607,10 @@ class SpotWidget(QtWidgets.QWidget):
         self.start_time = time.time()
         self.elapsed = 0
         self.timer.start()
+        
+        # Create database record
+        self.db_session_id = get_db().create_session(self.camera_side, self.plate_number)
+        
         self.content_stack.setCurrentIndex(2)
 
     def _update_timer(self):
@@ -566,6 +624,8 @@ class SpotWidget(QtWidgets.QWidget):
 
     def _stop_session(self):
         self.timer.stop()
+        # Update end time in DB
+        get_db().update_session_on_stop(self.db_session_id)
         self.content_stack.setCurrentIndex(3) # Show Depart View (Screen 1)
 
     def _show_payment_details(self):
@@ -585,6 +645,13 @@ class SpotWidget(QtWidgets.QWidget):
         self.content_stack.setCurrentIndex(3)
 
     def _process_payment(self):
+        # Calculate final amount for DB
+        hours = self.elapsed / 3600
+        total_price = max(0.00, hours * HOURLY_RATE)
+        
+        # Finalize database record
+        get_db().complete_payment(self.db_session_id, total_price)
+
         # Simulated payment
         QtWidgets.QMessageBox.information(self, "Payment Successful", f"Payment processed successfully.\nThank you!")
         self._set_state_available()
@@ -594,6 +661,47 @@ class SpotWidget(QtWidgets.QWidget):
         m = int((seconds % 3600) // 60)
         s = int(seconds % 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def start_camera(self):
+        """Initialize and start the camera feed."""
+        try:
+            from utility.camera import CameraHandler
+            if not self.camera_handler:
+                self.camera_handler = CameraHandler(self.camera_side)
+            if self.camera_handler.start():
+                self.cam_timer.start(33) # ~30 FPS
+                return True
+            else:
+                self.camera_feed_label.setText(f"❌ {self.camera_side.capitalize()} Cam Error")
+        except Exception as e:
+            print(f"Error starting {self.camera_side} camera: {e}")
+        return False
+
+    def stop_camera(self):
+        """Stop and release the camera."""
+        self.cam_timer.stop()
+        if self.camera_handler:
+            self.camera_handler.stop()
+            self.camera_handler = None
+        self.camera_feed_label.setText(f"{self.camera_side.capitalize()} Camera Feed")
+
+    def _update_camera_frame(self):
+        """Fetch and display frame from camera."""
+        if not self.camera_handler:
+            return
+            
+        frame = self.camera_handler.get_frame()
+        if frame is not None:
+            h, w, ch = frame.shape
+            bytes_per_line = ch * w
+            q_img = QtGui.QImage(frame.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+            pixmap = QtGui.QPixmap.fromImage(q_img)
+            self.camera_feed_label.setPixmap(pixmap.scaled(
+                self.camera_feed_label.width(), 
+                self.camera_feed_label.height(), 
+                QtCore.Qt.KeepAspectRatio,
+                QtCore.Qt.SmoothTransformation
+            ))
 
 class LidarMonitorDialog(QtWidgets.QDialog):
     """A sleek dialog to monitor live LiDAR data."""
@@ -769,15 +877,103 @@ class CameraDialog(QtWidgets.QDialog):
             pixmap = QtGui.QPixmap.fromImage(q_img)
             self.video_label.setPixmap(pixmap.scaled(self.video_label.width(), self.video_label.height(), AspectRatioMode.KeepAspectRatio))
 
+class HistoryViewerDialog(QtWidgets.QDialog):
+    """A dialog to display parking history from the database."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Parking History Records")
+        self.resize(800, 500)
+        self.setStyleSheet(f"background-color: {COLOR_BG}; color: white; font-family: 'Inter', sans-serif;")
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Header
+        header = QtWidgets.QLabel("📋 PARKING HISTORY")
+        header.setStyleSheet(f"color: {COLOR_ACCENT_BLUE}; font-size: 18px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(header)
+        
+        # Table
+        self.table = QtWidgets.QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels([
+            "Side", "Plate Number", "Start Time", "End Time", "Amount", "Paid"
+        ])
+        self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {COLOR_SPOT_BG};
+                color: white;
+                gridline-color: {COLOR_BORDER};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 8px;
+            }}
+            QHeaderView::section {{
+                background-color: #2c3e50;
+                color: white;
+                padding: 5px;
+                border: 1px solid {COLOR_BORDER};
+                font-weight: bold;
+            }}
+        """)
+        layout.addWidget(self.table)
+        
+        # Footer buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        self.refresh_btn = QtWidgets.QPushButton("REFRESH DATA")
+        self.refresh_btn.setStyleSheet(f"background-color: {COLOR_ACCENT_BLUE}; color: white; padding: 10px; border-radius: 5px; font-weight: bold;")
+        self.refresh_btn.clicked.connect(self.load_data)
+        btn_layout.addWidget(self.refresh_btn)
+        
+        self.close_btn = QtWidgets.QPushButton("CLOSE")
+        self.close_btn.setStyleSheet(f"background-color: #34495e; color: white; padding: 10px; border-radius: 5px; font-weight: bold;")
+        self.close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(self.close_btn)
+        
+        layout.addLayout(btn_layout)
+        
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.load_data()
+
+    def load_data(self):
+        """Fetch data from DB and populate table."""
+        try:
+            from services.database_service import get_db
+            records = get_db().fetch_history()
+            
+            self.table.setRowCount(0)
+            for row_idx, row_data in enumerate(records):
+                self.table.insertRow(row_idx)
+                for col_idx, value in enumerate(row_data):
+                    # Format data for display
+                    display_val = str(value)
+                    if col_idx == 2 or col_idx == 3: # Timestamps
+                        if value:
+                            display_val = value.strftime("%Y-%m-%d %H:%M:%S")
+                        else:
+                            display_val = "---"
+                    elif col_idx == 4: # Amount
+                        display_val = f"${float(value or 0):.2f}"
+                    elif col_idx == 5: # Paid
+                        display_val = "✅ Yes" if value else "❌ No"
+                    
+                    item = QtWidgets.QTableWidgetItem(display_val)
+                    item.setTextAlignment(QtCore.Qt.AlignCenter)
+                    self.table.setItem(row_idx, col_idx, item)
+        except Exception as e:
+            print(f"Error loading history: {e}")
+
 class DashboardWindow(QtWidgets.QMainWindow):
+    proximity_alert_signal = QtCore.pyqtSignal(str, bool)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PapayaMeter Dashboard")
         self.setMinimumSize(800, 480) 
         self.setStyleSheet(f"background-color: {COLOR_BG}; color: {COLOR_TEXT_WHITE}; font-family: 'Inter', sans-serif;")
-        
-        # Use showMaximized instead of FullScreen to keep Title Bar/Window controls visible
-        self.showMaximized()
 
         # Services
         self.backend = SensorBackend()
@@ -788,6 +984,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.log_viewer = LogViewerDialog(self)
         self.camera_left = CameraDialog("left", self)
         self.camera_right = CameraDialog("right", self)
+        self.history_viewer = HistoryViewerDialog(self)
 
         self._ignored_sensors = {} # Store sensor_name: timestamp
         self._last_alert_time = 0
@@ -795,6 +992,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self._init_ui()
         self._setup_shortcuts()
         self._start_refresh_timers()
+
+        # Connect internal signals for thread-safety
+        self.proximity_alert_signal.connect(self.notification_bar.show_alert)
+        print("[GUI DEBUG] Proximity signal connected to notification bar.")
 
         # Connect signals after UI is initialized
         self.backend.set_nfc_callback(self._handle_nfc_tap)
@@ -804,8 +1005,58 @@ class DashboardWindow(QtWidgets.QMainWindow):
         
         if hasattr(self, 'notification_bar'):
             self.notification_bar.baseline_requested.connect(self._on_tamper_baseline_requested)
+            
+        # Move showMaximized to very end to ensure all attributes (left_spot) are ready
+        self.showMaximized()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Start cameras when dashboard is shown
+        QtCore.QTimer.singleShot(500, self.left_spot.start_camera)
+        QtCore.QTimer.singleShot(1000, self.right_spot.start_camera)
+
+    def closeEvent(self, event):
+        # Stop cameras when closing
+        self.left_spot.stop_camera()
+        self.right_spot.stop_camera()
+        super().closeEvent(event)
+
+    def _open_cam_left(self):
+        """Pause dashboard left cam and open full view."""
+        self.left_spot.stop_camera()
+        # Connect finished signal to restart the dashboard camera
+        try:
+            self.camera_left.finished.disconnect()
+        except: pass
+        self.camera_left.finished.connect(lambda: self.left_spot.start_camera())
+        self.camera_left.show()
+
+    def _open_cam_right(self):
+        """Pause dashboard right cam and open full view."""
+        self.right_spot.stop_camera()
+        # Connect finished signal to restart the dashboard camera
+        try:
+            self.camera_right.finished.disconnect()
+        except: pass
+        self.camera_right.finished.connect(lambda: self.right_spot.start_camera())
+        self.camera_right.show()
 
     def _setup_shortcuts(self):
+        # Test Shortcut
+        self.test_alert = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+T"), self)
+        self.test_alert.activated.connect(lambda: self.notification_bar.show_alert("TEST ALERT: System check ok!"))
+
+        # Status monitor to debug notification state
+        self.status_timer = QtCore.QTimer()
+        self.status_timer.timeout.connect(self._check_notification_status)
+        self.status_timer.start(5000)
+
+    def _check_notification_status(self):
+        visible = self.notification_bar.isVisible()
+        # print(f"[GUI DEBUG] Status: NotificationBar Visible={visible}")
+        if visible:
+             self.notification_bar.raise_() # Keep it on top
+
         # Left Spot Shortcuts
         self.lc_start = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+N"), self)
         self.lc_start.activated.connect(lambda: self._handle_shortcut(self.left_spot, "start"))
@@ -880,12 +1131,11 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 if time.time() - self._ignored_sensors[sensor_name] < 60:
                     return
                 else:
-                    # Ignore expired
                     del self._ignored_sensors[sensor_name]
-            
-            # Show alert in UI via thread-safe timer
+
             msg = f"ALERT: Object is too near on {sensor_name}! ({distance:.1f} cm)"
-            QtCore.QTimer.singleShot(0, lambda: self.notification_bar.show_alert(msg))
+            print(f"[Ultrasonic] Alert triggered for {sensor_name}: {distance:.1f} cm")
+            self.proximity_alert_signal.emit(msg, False)
 
     def _handle_tamper_callback(self, data):
         """Called when a tamper event is detected by the hardware."""
@@ -897,12 +1147,8 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 del self._ignored_sensors["tamper"]
 
         msg = f"🚨 TAMPER DETECTED: {data.get('msg', 'Device moved or shaken')}"
-        # Detailed extra info for logging/debugging
-        details = f"Tilt: {data.get('tilt')}°, Gyro: {data.get('gyro')}dps, Lin: {data.get('linear')}g"
-        print(f"[GUI] {msg} ({details})")
-        
-        # Show alert in UI via thread-safe timer
-        QtCore.QTimer.singleShot(0, lambda: self.notification_bar.show_alert(msg, show_baseline=True))
+        print(f"[GUI DEBUG] Emitting tamper alert: {msg}")
+        self.proximity_alert_signal.emit(msg, True)
 
     def _on_tamper_baseline_requested(self):
         """Called when user wants to set the current state as the new baseline."""
@@ -937,10 +1183,6 @@ class DashboardWindow(QtWidgets.QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 0. Floating Notification Bar
-        self.notification_bar = NotificationBar(self)
-        self.notification_bar.ignored.connect(self._on_sensor_ignored)
-
         # 1. Header
         header = self._create_header()
         main_layout.addWidget(header)
@@ -952,7 +1194,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         body_layout.setSpacing(0)
 
         # Left Spot
-        self.left_spot = SpotWidget("LEFT SPOT", "SP-047")
+        self.left_spot = SpotWidget("LEFT SPOT", "SP-047", side="left")
         body_layout.addWidget(self.left_spot)
 
         # Vertical Divider
@@ -962,7 +1204,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         body_layout.addWidget(divider)
 
         # Right Spot
-        self.right_spot = SpotWidget("RIGHT SPOT", "SP-048")
+        self.right_spot = SpotWidget("RIGHT SPOT", "SP-048", side="right")
         body_layout.addWidget(self.right_spot)
 
         main_layout.addWidget(body, 1)
@@ -974,6 +1216,15 @@ class DashboardWindow(QtWidgets.QMainWindow):
         # 4. Footer Icons/Language
         footer = self._create_footer()
         main_layout.addWidget(footer)
+
+        # 0. Floating Notification Bar (Child of MainWindow to stay on top)
+        self.notification_bar = NotificationBar(self)
+        self.notification_bar.ignored.connect(self._on_sensor_ignored)
+        
+        # Force it on top every second if it's visible
+        self.raise_timer = QtCore.QTimer(self)
+        self.raise_timer.timeout.connect(lambda: self.notification_bar.visibleRegion().isEmpty() or self.notification_bar.raise_())
+        self.raise_timer.start(1000)
 
     def _create_header(self):
         header = QtWidgets.QWidget()
@@ -1120,16 +1371,22 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.logs_btn.clicked.connect(self.log_viewer.show)
         btn_layout.addWidget(self.logs_btn)
 
+        self.history_btn = QtWidgets.QPushButton("📋 Parking History")
+        self.history_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.history_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid {COLOR_ACCENT_GREEN}; color: {COLOR_ACCENT_GREEN}; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
+        self.history_btn.clicked.connect(self.history_viewer.show)
+        btn_layout.addWidget(self.history_btn)
+
         self.cam_left_btn = QtWidgets.QPushButton("📷 Cam Left")
         self.cam_left_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.cam_left_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid {COLOR_ACCENT_BLUE}; color: {COLOR_ACCENT_BLUE}; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
-        self.cam_left_btn.clicked.connect(self.camera_left.show)
+        self.cam_left_btn.clicked.connect(self._open_cam_left)
         btn_layout.addWidget(self.cam_left_btn)
 
         self.cam_right_btn = QtWidgets.QPushButton("📷 Cam Right")
         self.cam_right_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.cam_right_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid {COLOR_ACCENT_BLUE}; color: {COLOR_ACCENT_BLUE}; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
-        self.cam_right_btn.clicked.connect(self.camera_right.show)
+        self.cam_right_btn.clicked.connect(self._open_cam_right)
         btn_layout.addWidget(self.cam_right_btn)
 
         for text in ["⚙️ Hi-Contrast", "🔍 Enlarge"]:
@@ -1212,11 +1469,27 @@ class DashboardWindow(QtWidgets.QMainWindow):
         return chr(ord(country_code[0]) + 127397) + chr(ord(country_code[1]) + 127397)
 
 def main():
-    app = QtWidgets.QApplication(sys.argv)
-    app.setApplicationName("PapayaMeter")
-    window = DashboardWindow()
-    window.show()
-    sys.exit(app.exec_())
+    try:
+        global log_manager
+        app = QtWidgets.QApplication(sys.argv)
+        
+        # Initialize global logger after QApplication is ready
+        log_manager = LogManager()
+        sys.stdout = log_manager
+        sys.stderr = log_manager
+        
+        # Apply library path fix
+        if 'QT_PLUGINS_PATH' in globals() and os.path.exists(QT_PLUGINS_PATH):
+            app.addLibraryPath(QT_PLUGINS_PATH)
+            
+        app.setApplicationName("PapayaMeter")
+        window = DashboardWindow()
+        window.show()
+        sys.exit(app.exec_())
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

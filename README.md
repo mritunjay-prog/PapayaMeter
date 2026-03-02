@@ -106,7 +106,7 @@ The GUI is built with **PyQt6** and **pyqtgraph** and is designed so you can lat
 1. **Create & activate a virtual environment** (recommended):
 
    ```bash
-   cd /home/mritunjay/Desktop/PapayaMeter
+   cd ~/Desktop/PapayaMeter
    python3 -m venv .venv
    source .venv/bin/activate
    ```
@@ -152,7 +152,7 @@ The SSH tunnel service (`services/ssh_service.py`) can be started automatically 
 
 **One-time setup:**
 
-1. Edit `systemd/papaya-ssh.service` if your project path or username differs (update `User=`, `WorkingDirectory`, and `ExecStart` paths).
+1. The service file is already configured with dynamic paths using `%h`. You only need to verify the `User=` line in `systemd/papaya-ssh.service` matches your system username.
 
 2. Install and enable the service (requires sudo):
 
