@@ -1478,6 +1478,8 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
     def __init__(self):
         super().__init__()
+        # Ensure the window stays on top and bypasses some window manager focus stealing rules
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
         self.setWindowTitle("PapayaMeter Dashboard")
         self.setMinimumSize(800, 480) 
         self.setStyleSheet(f"background-color: {COLOR_BG}; color: {COLOR_TEXT_WHITE}; font-family: 'Inter', sans-serif;")
@@ -1514,8 +1516,15 @@ class DashboardWindow(QtWidgets.QMainWindow):
         if hasattr(self, 'notification_bar'):
             self.notification_bar.baseline_requested.connect(self._on_tamper_baseline_requested)
             
-        # Move showMaximized to very end to ensure all attributes (left_spot) are ready
+        # Bring window to front and ensure it's not minimized
+        self.setWindowState(self.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive | QtCore.Qt.WindowMaximized)
         self.showMaximized()
+        self.raise_()
+        self.activateWindow()
+        
+        # Some window managers require a short delay to properly accept focus after the window is shown
+        QtCore.QTimer.singleShot(100, self.activateWindow)
+        QtCore.QTimer.singleShot(200, self.raise_)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1998,7 +2007,9 @@ def main():
             
         app.setApplicationName("PapayaMeter")
         window = DashboardWindow()
-        window.show()
+        window.showMaximized()
+        window.raise_()
+        window.activateWindow()
         sys.exit(app.exec_())
     except Exception:
         import traceback
