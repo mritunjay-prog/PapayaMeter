@@ -22,12 +22,15 @@ def get_config():
 
 # Load settings from config.properties
 config = get_config()
-SSH_ENABLED = config.getboolean('ssh', 'enabled', fallback=True)
-SSH_HOST = config.get('ssh', 'host', fallback="34.232.20.123")
-SSH_USER = config.get('ssh', 'user', fallback="ubuntu")
+if not config.has_section('ssh'):
+    raise ValueError("Missing [ssh] section in config.properties")
+
+SSH_ENABLED = config.getboolean('ssh', 'enabled')
+SSH_HOST = config.get('ssh', 'host')
+SSH_USER = config.get('ssh', 'user')
 # Dynamically resolve home directory for the SSH key
-SSH_KEY_PATH = os.path.expanduser(config.get('ssh', 'key_path', fallback="~/.ssh/id_rsa_thingsboard"))
-SSH_REMOTE_PORT = config.get('ssh', 'remote_port', fallback="2222")
+SSH_KEY_PATH = os.path.expanduser(config.get('ssh', 'key_path'))
+SSH_REMOTE_PORT = config.get('ssh', 'remote_port')
 
 
 class SshService:
