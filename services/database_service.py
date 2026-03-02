@@ -34,6 +34,7 @@ class DatabaseService:
             
             self.conn = None
             self._ensure_table_exists()
+            self._ensure_roi_table_exists()
         except Exception as e:
             print(f"❌ Database setup error: {e}")
 
@@ -63,6 +64,68 @@ class DatabaseService:
             print("✅ Database table 'parking_details' is ready.")
         except Exception as e:
             print(f"❌ Error creating table: {e}")
+
+    def _ensure_roi_table_exists(self):
+        """Creates the roi_config table to store camera ROI polygons."""
+        conn = self._get_connection()
+        if not conn:
+            return
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS roi_config (
+                    id SERIAL PRIMARY KEY,
+                    device_name VARCHAR(100) NOT NULL,
+                    camera_side VARCHAR(10) NOT NULL,
+                    points JSONB NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (device_name, camera_side)
+                );
+            """)
+            cur.close()
+            print("✅ Database table 'roi_config' is ready.")
+        except Exception as e:
+            print(f"❌ Error creating roi_config table: {e}")
+
+    def save_roi(self, camera_side: str, points: list) -> bool:
+        """Upsert the ROI polygon for a given camera side (left/right)."""
+        import json
+        conn = self._get_connection()
+        if not conn:
+            return False
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO roi_config (device_name, camera_side, points, updated_at)
+                VALUES (%s, %s, %s::jsonb, NOW())
+                ON CONFLICT (device_name, camera_side)
+                DO UPDATE SET points = EXCLUDED.points, updated_at = NOW();
+            """, (self.device_name, camera_side, json.dumps(points)))
+            cur.close()
+            print(f"✅ ROI saved for camera '{camera_side}': {points}")
+            return True
+        except Exception as e:
+            print(f"❌ DB save_roi error: {e}")
+            return False
+
+    def load_roi(self, camera_side: str) -> list:
+        """Load the saved ROI polygon for a given camera side. Returns list of [x,y] or []."""
+        conn = self._get_connection()
+        if not conn:
+            return []
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT points FROM roi_config
+                WHERE device_name = %s AND camera_side = %s
+                ORDER BY updated_at DESC LIMIT 1;
+            """, (self.device_name, camera_side))
+            row = cur.fetchone()
+            cur.close()
+            return row[0] if row else []
+        except Exception as e:
+            print(f"❌ DB load_roi error: {e}")
+            return []
 
     def _get_connection(self):
         """Lazy connection to database with retry."""

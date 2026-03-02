@@ -822,42 +822,137 @@ class LogViewerDialog(QtWidgets.QDialog):
         self.log_display.clear()
 
 class CameraDialog(QtWidgets.QDialog):
-    """A dialog to display live feed from a USB camera (Left or Right)."""
+    """A dialog to display live feed from a USB camera with ROI drawing support."""
+
     def __init__(self, side="left", parent=None):
         super().__init__(parent)
         self.side = side
         self.setWindowTitle(f"Live Camera Feed - {side.capitalize()}")
-        self.setFixedSize(680, 560)
+        self.setMinimumSize(720, 620)
         self.setStyleSheet(f"background-color: {COLOR_BG}; color: white; border: 1px solid {COLOR_BORDER};")
-        
+
         layout = QtWidgets.QVBoxLayout(self)
-        
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        # ── Video area (label + canvas overlay) ──────────────────────── #
+        self.video_container = QtWidgets.QWidget()
+        self.video_container.setStyleSheet("background-color: black; border-radius: 10px;")
+        self.video_container.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        v_layout = QtWidgets.QVBoxLayout(self.video_container)
+        v_layout.setContentsMargins(0, 0, 0, 0)
+
         self.video_label = QtWidgets.QLabel(f"Starting {side.capitalize()} Camera...")
         self.video_label.setAlignment(AlignmentFlag.AlignCenter)
-        self.video_label.setStyleSheet("background-color: black; border-radius: 10px;")
-        layout.addWidget(self.video_label)
-        
+        self.video_label.setStyleSheet("background-color: transparent;")
+        self.video_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        v_layout.addWidget(self.video_label)
+
+        layout.addWidget(self.video_container, 1)
+
+        # ROI canvas – transparent overlay on top of video_label
+        from utility.roi_canvas import RoiCanvas
+        self.roi_canvas = RoiCanvas(self.video_label)
+        self.roi_canvas.roi_confirmed.connect(self._on_roi_draw_confirmed)
+        self.roi_canvas.roi_cleared.connect(self._on_roi_cleared)
+
+        # ── ROI Toolbar ───────────────────────────────────────────────── #
+        roi_bar = QtWidgets.QWidget()
+        roi_bar.setStyleSheet("background-color: #1a2332; border-radius: 8px; padding: 4px;")
+        roi_layout = QtWidgets.QHBoxLayout(roi_bar)
+        roi_layout.setContentsMargins(10, 5, 10, 5)
+        roi_layout.setSpacing(8)
+
+        roi_label = QtWidgets.QLabel("🔲 ROI:")
+        roi_label.setStyleSheet("color: #aaa; font-size: 12px; font-weight: bold;")
+        roi_layout.addWidget(roi_label)
+
+        self.draw_roi_btn = QtWidgets.QPushButton("✏️ Draw ROI")
+        self.draw_roi_btn.setCheckable(True)
+        self.draw_roi_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2980b9; color: white; font-weight: bold;
+                padding: 6px 14px; border-radius: 6px; font-size: 12px;
+            }
+            QPushButton:checked { background-color: #e67e22; }
+            QPushButton:hover { background-color: #3498db; }
+        """)
+        self.draw_roi_btn.clicked.connect(self._toggle_draw_roi)
+        roi_layout.addWidget(self.draw_roi_btn)
+
+        self.set_roi_btn = QtWidgets.QPushButton("✅ Set ROI")
+        self.set_roi_btn.setEnabled(False)
+        self.set_roi_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60; color: white; font-weight: bold;
+                padding: 6px 14px; border-radius: 6px; font-size: 12px;
+            }
+            QPushButton:disabled { background-color: #3d4a3d; color: #777; }
+            QPushButton:hover:enabled { background-color: #2ecc71; }
+        """)
+        self.set_roi_btn.clicked.connect(self._save_roi)
+        roi_layout.addWidget(self.set_roi_btn)
+
+        self.clear_roi_btn = QtWidgets.QPushButton("🗑️ Clear ROI")
+        self.clear_roi_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #7f8c8d; color: white; font-weight: bold;
+                padding: 6px 14px; border-radius: 6px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #95a5a6; }
+        """)
+        self.clear_roi_btn.clicked.connect(self._clear_roi)
+        roi_layout.addWidget(self.clear_roi_btn)
+
+        self.roi_status_label = QtWidgets.QLabel("No ROI set")
+        self.roi_status_label.setStyleSheet("color: #888; font-size: 11px; margin-left: 8px;")
+        roi_layout.addWidget(self.roi_status_label)
+
+        roi_layout.addStretch()
+        layout.addWidget(roi_bar)
+
+        # ── Hint label (shown only during drawing) ────────────────────── #
+        self.hint_label = QtWidgets.QLabel(
+            "🖱️  Click to place points  •  Double-click or press Set ROI to confirm  •  Right-click to undo last point")
+        self.hint_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.hint_label.setStyleSheet(
+            "color: #e67e22; font-size: 11px; background: transparent; padding: 2px;")
+        self.hint_label.setVisible(False)
+        layout.addWidget(self.hint_label)
+
+        # ── Close button ──────────────────────────────────────────────── #
         self.close_btn = QtWidgets.QPushButton(f"CLOSE {side.upper()} CAMERA")
-        self.close_btn.setStyleSheet(f"background-color: #e74c3c; color: white; font-weight: bold; padding: 10px; border-radius: 5px;")
+        self.close_btn.setStyleSheet(
+            "background-color: #e74c3c; color: white; font-weight: bold; padding: 10px; border-radius: 5px;")
         self.close_btn.clicked.connect(self.close)
         layout.addWidget(self.close_btn)
-        
+
         self.update_timer = QtCore.QTimer()
         self.update_timer.timeout.connect(self._fetch_frame)
-        
         self.camera = None
-        
+
+        # Current video frame dimensions (needed for coordinate mapping)
+        self._video_w = 640
+        self._video_h = 480
+
+    # ── Camera lifecycle ──────────────────────────────────────────────── #
+
     def showEvent(self, event):
         super().showEvent(event)
         try:
             from utility.camera import CameraHandler
             self.camera = CameraHandler(self.side)
             if self.camera.start():
-                self.update_timer.start(33) # ~30 FPS
+                self.update_timer.start(33)
             else:
                 self.video_label.setText(f"❌ ERROR: Could not open {self.side} camera")
         except Exception as e:
             self.video_label.setText(f"❌ ERROR: {e}")
+
+        # Load existing ROI from DB after a short delay so layout is settled
+        QtCore.QTimer.singleShot(500, self._load_existing_roi)
 
     def hideEvent(self, event):
         super().hideEvent(event)
@@ -866,16 +961,428 @@ class CameraDialog(QtWidgets.QDialog):
             self.camera.stop()
             self.camera = None
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Keep roi_canvas exactly covering the video_label
+        self.roi_canvas.setGeometry(self.video_label.geometry())
+
     def _fetch_frame(self):
-        if not self.camera: return
-        
+        if not self.camera:
+            return
         frame = self.camera.get_frame()
         if frame is not None:
+            self._video_h, self._video_w = frame.shape[:2]
             h, w, ch = frame.shape
-            bytes_per_line = ch * w
-            q_img = QtGui.QImage(frame.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+            q_img = QtGui.QImage(
+                frame.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
             pixmap = QtGui.QPixmap.fromImage(q_img)
-            self.video_label.setPixmap(pixmap.scaled(self.video_label.width(), self.video_label.height(), AspectRatioMode.KeepAspectRatio))
+            self.video_label.setPixmap(
+                pixmap.scaled(
+                    self.video_label.width(), self.video_label.height(),
+                    AspectRatioMode.KeepAspectRatio,
+                    TransformationMode.SmoothTransformation))
+            # Keep canvas geometry in sync
+            self.roi_canvas.setGeometry(self.video_label.geometry())
+
+    # ── ROI Drawing logic ─────────────────────────────────────────────── #
+
+    def _toggle_draw_roi(self, checked: bool):
+        if checked:
+            self.draw_roi_btn.setText("✏️ Drawing… (click to place points)")
+            self.set_roi_btn.setEnabled(True)
+            self.hint_label.setVisible(True)
+            self.roi_canvas.setGeometry(self.video_label.geometry())
+            self.roi_canvas.start_drawing()
+        else:
+            self.draw_roi_btn.setText("✏️ Draw ROI")
+            self.set_roi_btn.setEnabled(False)
+            self.hint_label.setVisible(False)
+            self.roi_canvas.stop_drawing()
+
+    def _save_roi(self):
+        """Confirm the polygon, save to DB."""
+        points = self.roi_canvas.get_video_points(self._video_w, self._video_h)
+        if len(points) < 3:
+            QtWidgets.QMessageBox.warning(
+                self, "ROI Error", "Please place at least 3 points to define an ROI.")
+            return
+
+        # Mark confirmed on canvas
+        self.roi_canvas._confirmed = True
+        self.roi_canvas._drawing = False
+        self.roi_canvas.setCursor(QtCore.Qt.ArrowCursor)
+        self.roi_canvas.update()
+
+        # Persist to DB
+        try:
+            from services.database_service import get_db
+            ok = get_db().save_roi(self.side, points)
+            if ok:
+                self.roi_status_label.setText(f"✅ ROI saved ({len(points)} pts)")
+                self.roi_status_label.setStyleSheet(
+                    "color: #2ecc71; font-size: 11px; margin-left: 8px;")
+            else:
+                self.roi_status_label.setText("⚠️ Saved locally (DB unavailable)")
+        except Exception as e:
+            print(f"[ROI] DB save error: {e}")
+            self.roi_status_label.setText("⚠️ DB error – ROI not persisted")
+
+        # Reset toolbar state
+        self.draw_roi_btn.setChecked(False)
+        self.draw_roi_btn.setText("✏️ Draw ROI")
+        self.set_roi_btn.setEnabled(False)
+        self.hint_label.setVisible(False)
+
+    def _clear_roi(self):
+        self.roi_canvas.reset()
+        self.draw_roi_btn.setChecked(False)
+        self.draw_roi_btn.setText("✏️ Draw ROI")
+        self.set_roi_btn.setEnabled(False)
+        self.hint_label.setVisible(False)
+
+    def _on_roi_draw_confirmed(self, pts):
+        """Called by RoiCanvas double-click auto-confirm."""
+        self._save_roi()
+
+    def _on_roi_cleared(self):
+        self.roi_status_label.setText("No ROI set")
+        self.roi_status_label.setStyleSheet("color: #888; font-size: 11px; margin-left: 8px;")
+
+    def _load_existing_roi(self):
+        """Load and display any previously saved ROI from the database."""
+        try:
+            from services.database_service import get_db
+            pts = get_db().load_roi(self.side)
+            if pts:
+                self.roi_canvas.setGeometry(self.video_label.geometry())
+                self.roi_canvas.show_existing_roi(pts, self._video_w, self._video_h)
+                self.roi_status_label.setText(f"✅ ROI loaded ({len(pts)} pts)")
+                self.roi_status_label.setStyleSheet(
+                    "color: #2ecc71; font-size: 11px; margin-left: 8px;")
+        except Exception as e:
+            print(f"[ROI] DB load error: {e}")
+
+class BeaconDialog(QtWidgets.QDialog):
+    """Control dialog for the Arduino Nano LED Beacon."""
+
+    # Color accent map  (display color, button style)
+    _COLOR_STYLES = {
+        'RED':   ('#e74c3c', '#c0392b'),
+        'AMBER': ('#f39c12', '#d68910'),
+        'GREEN': ('#2ecc71', '#27ae60'),
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🚨 LED Beacon Control")
+        self.setFixedWidth(500)
+        self.setStyleSheet(f"""
+            QDialog {{ background-color: {COLOR_BG}; color: white; }}
+            QLabel  {{ color: white; font-size: 12px; }}
+            QGroupBox {{
+                color: {COLOR_ACCENT_BLUE}; font-weight: bold; font-size: 12px;
+                border: 1px solid {COLOR_BORDER}; border-radius: 8px;
+                margin-top: 10px; padding: 10px;
+            }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}
+            QSpinBox, QSlider {{
+                background: {COLOR_SPOT_BG}; color: white;
+                border: 1px solid {COLOR_BORDER}; border-radius: 4px; padding: 4px;
+            }}
+        """)
+
+        self._beacon = None   # BeaconController instance (lazy-connected)
+        self._selected_color = 'GREEN'
+
+        main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
+
+        # ── Connection status bar ──────────────────────────────────────── #
+        conn_bar = QtWidgets.QWidget()
+        conn_bar.setStyleSheet(f"background: {COLOR_SPOT_BG}; border-radius: 6px; padding: 4px 10px;")
+        conn_layout = QtWidgets.QHBoxLayout(conn_bar)
+        conn_layout.setContentsMargins(10, 4, 10, 4)
+
+        self._status_dot = QtWidgets.QLabel("●")
+        self._status_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
+        self._status_text = QtWidgets.QLabel("Not connected")
+        self._status_text.setStyleSheet("color: #888; font-size: 11px;")
+
+        self._connect_btn = QtWidgets.QPushButton("Connect")
+        self._connect_btn.setFixedWidth(90)
+        self._connect_btn.setStyleSheet(
+            f"background: {COLOR_ACCENT_BLUE}; color: white; font-weight: bold; "
+            f"border-radius: 5px; padding: 5px 10px; font-size: 11px;")
+        self._connect_btn.clicked.connect(self._toggle_connection)
+
+        conn_layout.addWidget(self._status_dot)
+        conn_layout.addWidget(self._status_text)
+        conn_layout.addStretch()
+        conn_layout.addWidget(self._connect_btn)
+        main_layout.addWidget(conn_bar)
+
+        # ── Color Selector ─────────────────────────────────────────────── #
+        color_group = QtWidgets.QGroupBox("LED Color")
+        color_layout = QtWidgets.QHBoxLayout(color_group)
+        self._color_buttons = {}
+        for color, (bg, hover) in self._COLOR_STYLES.items():
+            btn = QtWidgets.QPushButton(color)
+            btn.setCheckable(True)
+            btn.setFixedHeight(40)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {bg}; color: white; font-weight: bold;
+                    border-radius: 8px; font-size: 13px; border: 3px solid transparent;
+                }}
+                QPushButton:checked {{ border: 3px solid white; }}
+                QPushButton:hover   {{ background-color: {hover}; }}
+            """)
+            btn.clicked.connect(lambda _, c=color: self._select_color(c))
+            color_layout.addWidget(btn)
+            self._color_buttons[color] = btn
+        main_layout.addWidget(color_group)
+        self._select_color('GREEN')   # default
+
+        # ── Timing Controls ────────────────────────────────────────────── #
+        timing_group = QtWidgets.QGroupBox("Timing")
+        timing_layout = QtWidgets.QFormLayout(timing_group)
+        timing_layout.setSpacing(8)
+
+        self._on_spin = QtWidgets.QSpinBox()
+        self._on_spin.setRange(1, 10000)
+        self._on_spin.setValue(500)
+        self._on_spin.setSuffix(" ms")
+        self._on_spin.setToolTip("How long the LED stays ON per blink")
+
+        self._off_spin = QtWidgets.QSpinBox()
+        self._off_spin.setRange(1, 10000)
+        self._off_spin.setValue(500)
+        self._off_spin.setSuffix(" ms")
+        self._off_spin.setToolTip("How long the LED stays OFF per blink")
+
+        timing_layout.addRow("ON Duration:", self._on_spin)
+        timing_layout.addRow("OFF Duration:", self._off_spin)
+        main_layout.addWidget(timing_group)
+
+        # ── Brightness ─────────────────────────────────────────────────── #
+        bright_group = QtWidgets.QGroupBox("Brightness")
+        bright_layout = QtWidgets.QVBoxLayout(bright_group)
+
+        bright_row = QtWidgets.QHBoxLayout()
+        self._bright_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self._bright_slider.setRange(0, 255)
+        self._bright_slider.setValue(128)
+        self._bright_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                background: #2c3e50; height: 6px; border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #3498db; width: 16px; height: 16px;
+                margin: -5px 0; border-radius: 8px;
+            }
+            QSlider::sub-page:horizontal { background: #3498db; border-radius: 3px; }
+        """)
+        self._bright_label = QtWidgets.QLabel("128")
+        self._bright_label.setFixedWidth(32)
+        self._bright_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        self._bright_slider.valueChanged.connect(
+            lambda v: self._bright_label.setText(str(v)))
+        bright_row.addWidget(self._bright_slider)
+        bright_row.addWidget(self._bright_label)
+        bright_layout.addLayout(bright_row)
+
+        bright_presets = QtWidgets.QHBoxLayout()
+        for label, val in [("Dim (50)", 50), ("Half (128)", 128), ("Full (255)", 255)]:
+            pb = QtWidgets.QPushButton(label)
+            pb.setStyleSheet(
+                f"background: {COLOR_SPOT_BG}; color: {COLOR_TEXT_GRAY}; "
+                f"border: 1px solid {COLOR_BORDER}; border-radius: 4px; "
+                f"padding: 3px 8px; font-size: 10px;")
+            pb.clicked.connect(lambda _, v=val: self._bright_slider.setValue(v))
+            bright_presets.addWidget(pb)
+        bright_layout.addLayout(bright_presets)
+        main_layout.addWidget(bright_group)
+
+        # ── Presets ────────────────────────────────────────────────────── #
+        preset_group = QtWidgets.QGroupBox("Quick Presets")
+        preset_layout = QtWidgets.QGridLayout(preset_group)
+        preset_layout.setSpacing(8)
+
+        presets = [
+            ("✅ System OK",   'GREEN', 1000, 1000,  80),
+            ("⚠️ Warning",     'AMBER',  300,  300, 180),
+            ("🚨 Error",       'RED',    200,  200, 255),
+            ("🅿️ Parking",    'GREEN',  200,  800,  50),
+        ]
+        for i, (label, color, on, off, bright) in enumerate(presets):
+            btn = QtWidgets.QPushButton(label)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {COLOR_SPOT_BG}; color: white; border-radius: 6px;
+                    border: 1px solid {COLOR_BORDER}; padding: 8px; font-size: 11px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{ background: #2c3e50; }}
+            """)
+            btn.clicked.connect(
+                lambda _, c=color, n=on, f=off, b=bright: self._apply_preset(c, n, f, b))
+            preset_layout.addWidget(btn, i // 2, i % 2)
+        main_layout.addWidget(preset_group)
+
+        # ── Action Buttons ─────────────────────────────────────────────── #
+        action_layout = QtWidgets.QHBoxLayout()
+
+        self._blink_btn = QtWidgets.QPushButton("▶ Continuous Blink")
+        self._blink_btn.setFixedHeight(42)
+        self._blink_btn.setEnabled(False)
+        self._blink_btn.setStyleSheet("""
+            QPushButton {
+                background: #2980b9; color: white; font-weight: bold;
+                border-radius: 8px; font-size: 13px;
+            }
+            QPushButton:hover:enabled { background: #3498db; }
+            QPushButton:disabled { background: #2c3e50; color: #555; }
+        """)
+        self._blink_btn.clicked.connect(self._do_blink)
+        action_layout.addWidget(self._blink_btn)
+
+        self._oneshot_btn = QtWidgets.QPushButton("⚡ Single Blink")
+        self._oneshot_btn.setFixedHeight(42)
+        self._oneshot_btn.setEnabled(False)
+        self._oneshot_btn.setStyleSheet("""
+            QPushButton {
+                background: #8e44ad; color: white; font-weight: bold;
+                border-radius: 8px; font-size: 13px;
+            }
+            QPushButton:hover:enabled { background: #9b59b6; }
+            QPushButton:disabled { background: #2c3e50; color: #555; }
+        """)
+        self._oneshot_btn.clicked.connect(lambda: self._do_blink(oneshot=True))
+        action_layout.addWidget(self._oneshot_btn)
+
+        self._stop_btn = QtWidgets.QPushButton("⏹ STOP")
+        self._stop_btn.setFixedHeight(42)
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.setStyleSheet("""
+            QPushButton {
+                background: #c0392b; color: white; font-weight: bold;
+                border-radius: 8px; font-size: 13px;
+            }
+            QPushButton:hover:enabled { background: #e74c3c; }
+            QPushButton:disabled { background: #2c3e50; color: #555; }
+        """)
+        self._stop_btn.clicked.connect(self._do_stop)
+        action_layout.addWidget(self._stop_btn)
+
+        main_layout.addLayout(action_layout)
+
+        # ── Response Log ───────────────────────────────────────────────── #
+        log_label = QtWidgets.QLabel("Arduino Response:")
+        log_label.setStyleSheet("color: #888; font-size: 11px;")
+        self._response_log = QtWidgets.QPlainTextEdit()
+        self._response_log.setReadOnly(True)
+        self._response_log.setMaximumHeight(80)
+        self._response_log.setStyleSheet(f"""
+            background: #0d1117; color: #2ecc71;
+            border: 1px solid {COLOR_BORDER}; border-radius: 6px;
+            font-family: monospace; font-size: 11px; padding: 4px;
+        """)
+        main_layout.addWidget(log_label)
+        main_layout.addWidget(self._response_log)
+
+        # Close
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.setStyleSheet(
+            f"background: {COLOR_SPOT_BG}; color: white; border-radius: 5px; padding: 8px;")
+        close_btn.clicked.connect(self.close)
+        main_layout.addWidget(close_btn)
+
+    # ── Slots ──────────────────────────────────────────────────────────── #
+
+    def _select_color(self, color: str):
+        self._selected_color = color
+        for c, btn in self._color_buttons.items():
+            btn.setChecked(c == color)
+
+    def _toggle_connection(self):
+        if self._beacon and self._beacon.is_connected:
+            self._beacon.disconnect()
+            self._beacon = None
+            self._set_connected(False)
+        else:
+            from utility.beacon import BeaconController
+            self._beacon = BeaconController()
+            ok = self._beacon.connect()
+            self._set_connected(ok)
+            if not ok:
+                self._beacon = None
+                self._log("❌ Connection failed – check port in config.properties")
+
+    def _set_connected(self, connected: bool):
+        if connected:
+            self._status_dot.setStyleSheet("color: #2ecc71; font-size: 16px;")
+            self._status_text.setText(
+                f"Connected  •  {self._beacon.port}")
+            self._connect_btn.setText("Disconnect")
+            self._connect_btn.setStyleSheet(
+                "background: #e74c3c; color: white; font-weight: bold; "
+                "border-radius: 5px; padding: 5px 10px; font-size: 11px;")
+        else:
+            self._status_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
+            self._status_text.setText("Not connected")
+            self._connect_btn.setText("Connect")
+            self._connect_btn.setStyleSheet(
+                f"background: {COLOR_ACCENT_BLUE}; color: white; font-weight: bold; "
+                f"border-radius: 5px; padding: 5px 10px; font-size: 11px;")
+
+        for btn in [self._blink_btn, self._oneshot_btn, self._stop_btn]:
+            btn.setEnabled(connected)
+
+    def _do_blink(self, oneshot: bool = False):
+        if not self._beacon:
+            return
+        try:
+            resp = self._beacon.blink(
+                color=self._selected_color,
+                on_ms=self._on_spin.value(),
+                off_ms=self._off_spin.value(),
+                brightness=self._bright_slider.value(),
+                oneshot=oneshot
+            )
+            mode = "Single" if oneshot else "Continuous"
+            self._log(
+                f"[{mode}] {self._selected_color}  "
+                f"ON={self._on_spin.value()}ms  OFF={self._off_spin.value()}ms  "
+                f"BRIGHT={self._bright_slider.value()}\n"
+                f"  → Arduino: {resp or '(no response)'}")
+        except Exception as e:
+            self._log(f"❌ Error: {e}")
+
+    def _do_stop(self):
+        if not self._beacon:
+            return
+        try:
+            resp = self._beacon.stop()
+            self._log(f"[STOP] All LEDs OFF  → Arduino: {resp or '(no response)'}")
+        except Exception as e:
+            self._log(f"❌ Error: {e}")
+
+    def _apply_preset(self, color: str, on: int, off: int, bright: int):
+        self._select_color(color)
+        self._on_spin.setValue(on)
+        self._off_spin.setValue(off)
+        self._bright_slider.setValue(bright)
+        self._do_blink()
+
+    def _log(self, text: str):
+        self._response_log.appendPlainText(text)
+
+    def closeEvent(self, event):
+        if self._beacon and self._beacon.is_connected:
+            self._beacon.disconnect()
+        super().closeEvent(event)
+
 
 class HistoryViewerDialog(QtWidgets.QDialog):
     """A dialog to display parking history from the database."""
@@ -985,6 +1492,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.camera_left = CameraDialog("left", self)
         self.camera_right = CameraDialog("right", self)
         self.history_viewer = HistoryViewerDialog(self)
+        self.beacon_dialog   = BeaconDialog(self)
 
         self._ignored_sensors = {} # Store sensor_name: timestamp
         self._last_alert_time = 0
@@ -1382,6 +1890,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.cam_left_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid {COLOR_ACCENT_BLUE}; color: {COLOR_ACCENT_BLUE}; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
         self.cam_left_btn.clicked.connect(self._open_cam_left)
         btn_layout.addWidget(self.cam_left_btn)
+
+        self.beacon_btn = QtWidgets.QPushButton("🚨 Beacon")
+        self.beacon_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.beacon_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid #e67e22; color: #e67e22; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
+        self.beacon_btn.clicked.connect(self.beacon_dialog.show)
+        btn_layout.addWidget(self.beacon_btn)
 
         self.cam_right_btn = QtWidgets.QPushButton("📷 Cam Right")
         self.cam_right_btn.setCursor(QtCore.Qt.PointingHandCursor)
