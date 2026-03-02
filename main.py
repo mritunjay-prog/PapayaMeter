@@ -1794,54 +1794,60 @@ class DashboardWindow(QtWidgets.QMainWindow):
         layout.setContentsMargins(20, 10, 20, 10)
         layout.setSpacing(20)
 
-        # Left Progress Bar (Battery)
-        self.battery_info_label = QtWidgets.QLabel("0%")
+        # ── Left Monitor Bar ─────────────────────────────────────────── #
+        self.battery_info_label = QtWidgets.QLabel("0.00V")
         self.battery_info_label.setStyleSheet("font-size: 12px; font-weight: bold; margin-right: 10px;")
         
         self.battery_bar = QtWidgets.QProgressBar()
         self.battery_bar.setFixedHeight(12)
         self.battery_bar.setTextVisible(False)
         self.battery_bar.setStyleSheet(f"""
-            QProgressBar {{
-                background-color: {COLOR_SPOT_BG};
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 6px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {COLOR_ACCENT_GREEN};
-                border-radius: 5px;
-            }}
+            QProgressBar {{ background-color: {COLOR_SPOT_BG}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; }}
+            QProgressBar::chunk {{ background-color: {COLOR_ACCENT_GREEN}; border-radius: 5px; }}
         """)
         
-        self.battery_info_right = QtWidgets.QLabel("0.0kW")
+        self.battery_info_right = QtWidgets.QLabel("0.000A")
         self.battery_info_right.setStyleSheet(f"color: {COLOR_ACCENT_GREEN}; font-size: 12px; font-weight: bold; margin-left: 10px;")
 
-        bar_inner_layout = QtWidgets.QHBoxLayout()
-        bolt_icon = QtWidgets.QLabel("⚡")
-        bar_inner_layout.addWidget(bolt_icon)
-        bar_inner_layout.addWidget(self.battery_info_label)
-        bar_inner_layout.addWidget(self.battery_bar, 1)
-        bar_inner_layout.addWidget(self.battery_info_right)
+        left_inner = QtWidgets.QHBoxLayout()
+        left_inner.addWidget(QtWidgets.QLabel("⚡"))
+        left_inner.addWidget(self.battery_info_label)
+        left_inner.addWidget(self.battery_bar, 1)
+        left_inner.addWidget(self.battery_info_right)
         
-        left_bar_widget = QtWidgets.QWidget()
-        left_bar_widget.setFixedHeight(40)
-        left_bar_widget.setStyleSheet(f"border: 1px solid {COLOR_BORDER}; border-radius: 20px; background-color: {COLOR_BG};")
-        left_bar_widget.setLayout(bar_inner_layout)
+        left_bar = QtWidgets.QWidget()
+        left_bar.setFixedHeight(40)
+        left_bar.setStyleSheet(f"border: 1px solid {COLOR_BORDER}; border-radius: 20px; background-color: {COLOR_BG};")
+        left_bar.setLayout(left_inner)
         
-        # Right "NO CHARGER" bar
-        no_charger_bar = QtWidgets.QWidget()
-        no_charger_bar.setFixedHeight(40)
-        no_charger_bar.setStyleSheet(f"border: 1px solid {COLOR_BORDER}; border-radius: 20px; background-color: {COLOR_BG};")
-        nc_layout = QtWidgets.QHBoxLayout(no_charger_bar)
-        nc_icon = QtWidgets.QLabel("🔌")
-        nc_label = QtWidgets.QLabel("NO CHARGER")
-        nc_label.setStyleSheet(f"color: {COLOR_TEXT_GRAY}; font-size: 12px; font-weight: bold;")
-        nc_layout.addWidget(nc_icon)
-        nc_layout.addWidget(nc_label)
-        nc_layout.addStretch()
+        # ── Right Monitor Bar (Mirrored) ──────────────────────────────── #
+        self.battery_info_label_r = QtWidgets.QLabel("0.00V")
+        self.battery_info_label_r.setStyleSheet("font-size: 12px; font-weight: bold; margin-right: 10px;")
+        
+        self.battery_bar_r = QtWidgets.QProgressBar()
+        self.battery_bar_r.setFixedHeight(12)
+        self.battery_bar_r.setTextVisible(False)
+        self.battery_bar_r.setStyleSheet(f"""
+            QProgressBar {{ background-color: {COLOR_SPOT_BG}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; }}
+            QProgressBar::chunk {{ background-color: {COLOR_ACCENT_GREEN}; border-radius: 5px; }}
+        """)
+        
+        self.battery_info_right_r = QtWidgets.QLabel("0.000A")
+        self.battery_info_right_r.setStyleSheet(f"color: {COLOR_ACCENT_GREEN}; font-size: 12px; font-weight: bold; margin-left: 10px;")
 
-        layout.addWidget(left_bar_widget, 1)
-        layout.addWidget(no_charger_bar, 1)
+        right_inner = QtWidgets.QHBoxLayout()
+        right_inner.addWidget(QtWidgets.QLabel("⚡"))
+        right_inner.addWidget(self.battery_info_label_r)
+        right_inner.addWidget(self.battery_bar_r, 1)
+        right_inner.addWidget(self.battery_info_right_r)
+        
+        right_bar = QtWidgets.QWidget()
+        right_bar.setFixedHeight(40)
+        right_bar.setStyleSheet(f"border: 1px solid {COLOR_BORDER}; border-radius: 20px; background-color: {COLOR_BG};")
+        right_bar.setLayout(right_inner)
+
+        layout.addWidget(left_bar, 1)
+        layout.addWidget(right_bar, 1)
 
         return container
 
@@ -1948,14 +1954,27 @@ class DashboardWindow(QtWidgets.QMainWindow):
         now = datetime.now()
         self.clock_label.setText(now.strftime("%a, %b %d • %I:%M:%S %p"))
 
-        # Update battery and location from system service
+        # Update electrical and location from system service
         stats = self.system_service.get_stats()
-        bat_percent = stats["battery_percent"]
-        bat_power = stats["battery_power"]
+        elec = stats.get("electrical", {})
         
-        self.battery_info_label.setText(f"{int(bat_percent)}%")
-        self.battery_bar.setValue(int(bat_percent))
-        self.battery_info_right.setText(f"{bat_power}kW")
+        bus_v = elec.get("bus_voltage", 0.0)
+        current = elec.get("current", 0.0)
+        power = elec.get("power", 0.0)
+        
+        # Display Voltage on both sides
+        self.battery_info_label.setText(f"{bus_v:.2f}V")
+        self.battery_info_label_r.setText(f"{bus_v:.2f}V")
+        
+        # Bar reflects voltage level (assuming a 12V system: 10V empty, 15V full)
+        v_min, v_max = 10.0, 15.0
+        v_percent = max(0, min(100, (bus_v - v_min) / (v_max - v_min) * 100))
+        self.battery_bar.setValue(int(v_percent))
+        self.battery_bar_r.setValue(int(v_percent))
+        
+        # Display Current on both sides
+        self.battery_info_right.setText(f"{current:.3f}A")
+        self.battery_info_right_r.setText(f"{current:.3f}A")
         
         # Update Temperature from backend
         try:

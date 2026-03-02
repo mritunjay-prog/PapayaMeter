@@ -25,7 +25,7 @@ class DatabaseService:
         try:
             self.host = self.config.get('database', 'host', fallback='localhost')
             self.port = self.config.getint('database', 'port', fallback=5432)
-            self.user = self.config.get('database', 'user', fallback='myuser')
+            self.user = self.config.get('database', 'user', fallback='papaya')
             self.password = self.config.get('database', 'password', fallback='example')
             self.dbname = self.config.get('database', 'dbname', fallback='papaya_meter')
             

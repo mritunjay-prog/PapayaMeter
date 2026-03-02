@@ -10,3 +10,4 @@ pyserial
 paho-mqtt
 psutil
 psycopg2-binary
+smbus2
