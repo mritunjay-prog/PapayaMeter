@@ -1,8 +1,8 @@
 try:
-    import smbus
+    import smbus2 as smbus
 except ImportError:
     try:
-        from smbus2 import SMBus as smbus
+        import smbus
     except ImportError:
         smbus = None
 import time

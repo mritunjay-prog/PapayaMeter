@@ -5,6 +5,7 @@ import os
 import configparser
 from datetime import datetime
 
+
 def get_config():
     config = configparser.ConfigParser()
     config_path = os.path.join(os.path.dirname(__file__), 'config.properties')
@@ -114,7 +115,7 @@ def run_air_quality_listener(callback=None):
                 callback(output_dict)
             
             # Duty cycle: Sleep before next measurement block
-            time.sleep(1) # As requested by current script (though duty cycle usually longer)
+            time.sleep(1) 
             
     except KeyboardInterrupt:
         print("Closing AirQuality listener...")

@@ -2156,6 +2156,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
                     ldr_left.value if ldr_left else -1.0,
                     ldr_right.value if ldr_right else -1.0
                 )
+            
+            # Update Air Quality from backend
+            aqi = readings.get("AirQuality")
+            if aqi and aqi.value is not None:
+                # Trigger internal handler used by callback for consistency
+                self._handle_air_update({"PM2.5": aqi.value})
         except Exception as e:
             # print(f"[GUI REFRESH ERROR] {e}")
             pass

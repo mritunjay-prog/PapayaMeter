@@ -19,6 +19,7 @@ from utility.ultrasonic import run_ultrasonic_check
 from utility.ambience_light import run_ambience_light_listener
 from utility.temp_hum import run_temp_hum_listener
 from utility.tamper import run_tamper_monitor
+from utility.airquality import run_air_quality_listener
 from services.telemetry_publisher import publish_telemetry, set_mqtt_token
 
 
@@ -112,6 +113,20 @@ def tamper_callback(data):
     }
     publish_telemetry(payload)
     sys_log(f"🚨 [TAMPER ALERT] {data.get('msg')} | Tilt: {data.get('tilt')}")
+
+def air_quality_callback(data):
+    """Publish Air Quality data to ThingsBoard."""
+    ts = int(time.time() * 1000)
+    payload = {
+        "ts": ts,
+        "values": {
+            "air.pm25": data.get("PM2.5"),
+            "air.pm10": data.get("PM10"),
+            "air.pm1_0": data.get("PM1.0")
+        }
+    }
+    publish_telemetry(payload)
+    # sys_log(f"📤 Air Quality Telemetry queued at {datetime.now().strftime('%H:%M:%S')}")
 
 def get_display_env():
     """
@@ -245,6 +260,15 @@ def main():
         daemon=True
     )
     tamper_thread.start()
+
+    # 4e. Start Air Quality monitoring
+    sys_log("🚀 Starting Air Quality monitoring...")
+    air_thread = threading.Thread(
+        target=run_air_quality_listener,
+        kwargs={'callback': air_quality_callback},
+        daemon=True
+    )
+    air_thread.start()
 
     # 5. Start LiDAR collection and transmission
     sys_log("🚀 Starting LiDAR data collection (Left & Right)...")
