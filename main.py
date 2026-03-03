@@ -1958,10 +1958,14 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.lux_label = QtWidgets.QLabel("☀️ -- Lux")
         self.lux_label.setStyleSheet("font-size: 14px; margin-left: 15px;")
 
+        self.battery_label = QtWidgets.QLabel("🔋 --%")
+        self.battery_label.setStyleSheet("font-size: 14px; margin-left: 15px;")
+
         layout.addWidget(self.temp_label)
         layout.addWidget(self.humidity_label)
         layout.addWidget(self.aqi_label)
         layout.addWidget(self.lux_label)
+        layout.addWidget(self.battery_label)
 
         return header
 
@@ -1972,9 +1976,6 @@ class DashboardWindow(QtWidgets.QMainWindow):
         layout.setSpacing(20)
 
         # ── Left Monitor Bar ─────────────────────────────────────────── #
-        self.battery_info_label = QtWidgets.QLabel("0.00V")
-        self.battery_info_label.setStyleSheet("font-size: 12px; font-weight: bold; margin-right: 10px;")
-        
         self.battery_bar = QtWidgets.QProgressBar()
         self.battery_bar.setFixedHeight(12)
         self.battery_bar.setTextVisible(False)
@@ -1982,15 +1983,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
             QProgressBar {{ background-color: {COLOR_SPOT_BG}; border: 1px solid {COLOR_BORDER}; border-radius: 6px; }}
             QProgressBar::chunk {{ background-color: {COLOR_ACCENT_GREEN}; border-radius: 5px; }}
         """)
-        
-        self.battery_info_right = QtWidgets.QLabel("0.000A")
-        self.battery_info_right.setStyleSheet(f"color: {COLOR_ACCENT_GREEN}; font-size: 12px; font-weight: bold; margin-left: 10px;")
 
         left_inner = QtWidgets.QHBoxLayout()
         left_inner.addWidget(QtWidgets.QLabel("⚡"))
-        left_inner.addWidget(self.battery_info_label)
         left_inner.addWidget(self.battery_bar, 1)
-        left_inner.addWidget(self.battery_info_right)
         
         left_bar = QtWidgets.QWidget()
         left_bar.setFixedHeight(40)
@@ -1998,9 +1994,6 @@ class DashboardWindow(QtWidgets.QMainWindow):
         left_bar.setLayout(left_inner)
         
         # ── Right Monitor Bar (Mirrored) ──────────────────────────────── #
-        self.battery_info_label_r = QtWidgets.QLabel("0.00V")
-        self.battery_info_label_r.setStyleSheet("font-size: 12px; font-weight: bold; margin-right: 10px;")
-        
         self.battery_bar_r = QtWidgets.QProgressBar()
         self.battery_bar_r.setFixedHeight(12)
         self.battery_bar_r.setTextVisible(False)
@@ -2009,14 +2002,9 @@ class DashboardWindow(QtWidgets.QMainWindow):
             QProgressBar::chunk {{ background-color: {COLOR_ACCENT_GREEN}; border-radius: 5px; }}
         """)
         
-        self.battery_info_right_r = QtWidgets.QLabel("0.000A")
-        self.battery_info_right_r.setStyleSheet(f"color: {COLOR_ACCENT_GREEN}; font-size: 12px; font-weight: bold; margin-left: 10px;")
-
         right_inner = QtWidgets.QHBoxLayout()
         right_inner.addWidget(QtWidgets.QLabel("⚡"))
-        right_inner.addWidget(self.battery_info_label_r)
         right_inner.addWidget(self.battery_bar_r, 1)
-        right_inner.addWidget(self.battery_info_right_r)
         
         right_bar = QtWidgets.QWidget()
         right_bar.setFixedHeight(40)
@@ -2132,6 +2120,35 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.slow_timer.start(30000)
         self._refresh_slow_data() # Initial call
 
+    def _get_battery_percentage(self, bus_v):
+        """Calculate battery percentage based on 12V SOC table."""
+        if bus_v >= 13.6: return 100.0
+        if bus_v <= 10.0: return 0.0
+        
+        # Points (voltage, percentage) from 12V column of SOC table
+        # Using calculated values from 1-cell column: CellV * 4
+        points = [
+            (10.0,  0),
+            (12.0,  10),
+            (12.8,  20),
+            (12.88, 30),
+            (13.0,  40),
+            (13.04, 50),
+            (13.08, 60),
+            (13.2,  70),
+            (13.28, 80),
+            (13.4,  90),
+            (13.6,  100)
+        ]
+        
+        for i in range(len(points) - 1):
+            v1, p1 = points[i]
+            v2, p2 = points[i+1]
+            if v1 <= bus_v <= v2:
+                # Linear interpolation
+                return p1 + (p2 - p1) * (bus_v - v1) / (v2 - v1)
+        return 100.0 if bus_v > 13.6 else 0.0
+
     def _refresh_ui(self):
         # Update clock
         now = datetime.now()
@@ -2142,22 +2159,20 @@ class DashboardWindow(QtWidgets.QMainWindow):
         elec = stats.get("electrical", {})
         
         bus_v = elec.get("bus_voltage", 0.0)
-        current = elec.get("current", 0.0)
-        power = elec.get("power", 0.0)
         
-        # Display Voltage on both sides
-        self.battery_info_label.setText(f"{bus_v:.2f}V")
-        self.battery_info_label_r.setText(f"{bus_v:.2f}V")
+        # Calculate Percentage using 12V logic table
+        battery_pct = self._get_battery_percentage(bus_v)
         
-        # Bar reflects voltage level (assuming a 12V system: 10V empty, 15V full)
-        v_min, v_max = 10.0, 15.0
-        v_percent = max(0, min(100, (bus_v - v_min) / (v_max - v_min) * 100))
-        self.battery_bar.setValue(int(v_percent))
-        self.battery_bar_r.setValue(int(v_percent))
-        
-        # Display Current on both sides
-        self.battery_info_right.setText(f"{current:.3f}A")
-        self.battery_info_right_r.setText(f"{current:.3f}A")
+        # Update TOP RIGHT header label
+        self.battery_label.setText(f"🔋 {battery_pct:.1f}%")
+        if battery_pct < 20:
+            self.battery_label.setStyleSheet("font-size: 14px; margin-left: 15px; color: #e74c3c; font-weight: bold;")
+        else:
+            self.battery_label.setStyleSheet("font-size: 14px; margin-left: 15px; color: white;")
+            
+        # Update sidebar progress bars
+        self.battery_bar.setValue(int(battery_pct))
+        self.battery_bar_r.setValue(int(battery_pct))
         
         # Update Temperature and Humidity from backend
         try:
