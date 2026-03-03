@@ -349,3 +349,5 @@ class SensorBackend:
                     # Initialize with null if no data yet
                     readings[name] = SensorReading(name=name, value=-1.0, unit="cm", timestamp=now)
 
+        return readings
+
