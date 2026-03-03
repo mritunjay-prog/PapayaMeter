@@ -5,7 +5,6 @@ from typing import Dict, Optional, Callable
 # This must happen BEFORE any other imports that might touch Qt or cv2
 import os
 import sys
-import webbrowser
 
 # Force PyQt5 to use its own plugins instead of cv2's conflicting ones
 venv_base = os.path.dirname(os.path.abspath(__file__))
@@ -655,12 +654,6 @@ class SpotWidget(QtWidgets.QWidget):
 
         # Simulated payment
         QtWidgets.QMessageBox.information(self, "Payment Successful", f"Payment processed successfully.\nThank you!")
-        
-        # Open browser to google.com as requested
-        try:
-            webbrowser.open("https://google.com")
-        except Exception as e:
-            print(f"Error opening browser: {e}")
 
         self._set_state_available()
 
