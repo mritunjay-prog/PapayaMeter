@@ -35,6 +35,7 @@ from datetime import datetime
 from sensor_backend import SensorBackend, LIDAR_LEFT_NAME, LIDAR_RIGHT_NAME, LIDAR_SENSOR_NAME
 from services.system_service import SystemService
 from services.database_service import get_db
+from services.telemetry_publisher import publish_telemetry, set_mqtt_token
 
 # Color constants to match the image
 COLOR_BG = "#12171e"
@@ -611,6 +612,23 @@ class SpotWidget(QtWidgets.QWidget):
         # Create database record
         self.db_session_id = get_db().create_session(self.camera_side, self.plate_number)
         
+        # ── MQTT: publish parking_start event ──────────────────────────────────
+        start_ts_ms = int(self.start_time * 1000)
+        publish_telemetry({
+            "ts": start_ts_ms,
+            "values": {
+                "parking.event":       "parking_start",
+                "parking.spot":        self.spot_name,
+                "parking.spot_id":     self.id_code,
+                "parking.plate":       self.plate_number,
+                "parking.start_time":  datetime.fromtimestamp(self.start_time).isoformat(),
+                "parking.start_ts_ms": start_ts_ms,
+                "parking.hourly_rate": HOURLY_RATE,
+            }
+        })
+        print(f"[MQTT] parking_start published for {self.plate_number} on {self.spot_name}")
+        # ───────────────────────────────────────────────────────────────────────
+        
         self.content_stack.setCurrentIndex(2)
 
     def _update_timer(self):
@@ -624,8 +642,36 @@ class SpotWidget(QtWidgets.QWidget):
 
     def _stop_session(self):
         self.timer.stop()
+        stop_time = time.time()
+        stop_ts_ms = int(stop_time * 1000)
+        
         # Update end time in DB
         get_db().update_session_on_stop(self.db_session_id)
+        
+        # ── MQTT: publish parking_stop event ───────────────────────────────────
+        hours = self.elapsed / 3600
+        accrued_amount = round(max(0.00, hours * HOURLY_RATE), 2)
+        publish_telemetry({
+            "ts": stop_ts_ms,
+            "values": {
+                "parking.event":          "parking_stop",
+                "parking.spot":           self.spot_name,
+                "parking.spot_id":        self.id_code,
+                "parking.plate":          self.plate_number,
+                "parking.start_time":     datetime.fromtimestamp(self.start_time).isoformat(),
+                "parking.start_ts_ms":    int(self.start_time * 1000),
+                "parking.stop_time":      datetime.fromtimestamp(stop_time).isoformat(),
+                "parking.stop_ts_ms":     stop_ts_ms,
+                "parking.duration_secs":  round(self.elapsed, 1),
+                "parking.duration_mins":  round(self.elapsed / 60, 2),
+                "parking.hourly_rate":    HOURLY_RATE,
+                "parking.accrued_amount": accrued_amount,
+                "parking.paid":           False,
+            }
+        })
+        print(f"[MQTT] parking_stop published for {self.plate_number} on {self.spot_name} — ₹{accrued_amount}")
+        # ───────────────────────────────────────────────────────────────────────
+        
         self.content_stack.setCurrentIndex(3) # Show Depart View (Screen 1)
 
     def _show_payment_details(self):
@@ -647,10 +693,34 @@ class SpotWidget(QtWidgets.QWidget):
     def _process_payment(self):
         # Calculate final amount for DB
         hours = self.elapsed / 3600
-        total_price = max(0.00, hours * HOURLY_RATE)
+        total_price = round(max(0.00, hours * HOURLY_RATE), 2)
+        payment_time = time.time()
+        payment_ts_ms = int(payment_time * 1000)
         
         # Finalize database record
         get_db().complete_payment(self.db_session_id, total_price)
+
+        # ── MQTT: publish parking_payment event ────────────────────────────────
+        publish_telemetry({
+            "ts": payment_ts_ms,
+            "values": {
+                "parking.event":          "parking_payment",
+                "parking.spot":           self.spot_name,
+                "parking.spot_id":        self.id_code,
+                "parking.plate":          self.plate_number,
+                "parking.start_time":     datetime.fromtimestamp(self.start_time).isoformat(),
+                "parking.start_ts_ms":    int(self.start_time * 1000),
+                "parking.payment_time":   datetime.fromtimestamp(payment_time).isoformat(),
+                "parking.payment_ts_ms":  payment_ts_ms,
+                "parking.duration_secs":  round(self.elapsed, 1),
+                "parking.duration_mins":  round(self.elapsed / 60, 2),
+                "parking.hourly_rate":    HOURLY_RATE,
+                "parking.total_amount":   total_price,
+                "parking.paid":           True,
+            }
+        })
+        print(f"[MQTT] parking_payment published — ₹{total_price} for {self.plate_number}")
+        # ───────────────────────────────────────────────────────────────────────
 
         # Simulated payment
         QtWidgets.QMessageBox.information(self, "Payment Successful", f"Payment processed successfully.\nThank you!")
@@ -1639,6 +1709,15 @@ class DashboardWindow(QtWidgets.QMainWindow):
         # Services
         self.backend = SensorBackend()
         self.system_service = SystemService()
+
+        # ── MQTT: initialise telemetry publisher with device token ──────────────
+        _tb_token = config.get('thingsboard', 'token', fallback=None)
+        if _tb_token:
+            set_mqtt_token(_tb_token)
+            print(f"[MQTT] Token set — publisher ready")
+        else:
+            print("[MQTT] WARNING: No ThingsBoard token in config.properties")
+        # ───────────────────────────────────────────────────────────────────────
         self.system_service.start()
         
         self.lidar_monitor = LidarMonitorDialog(self)
@@ -1666,6 +1745,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.backend.set_ultrasonic_callback(self._handle_ultrasonic_callback)
         self.backend.set_tamper_callback(self._handle_tamper_callback)
         self.backend.set_ambience_callback(self._handle_ambience_update)
+        self.backend.set_temp_callback(self._handle_temp_update)
         
         if hasattr(self, 'notification_bar'):
             self.notification_bar.baseline_requested.connect(self._on_tamper_baseline_requested)
@@ -1776,7 +1856,9 @@ class DashboardWindow(QtWidgets.QMainWindow):
     def _handle_air_update(self, data):
         """Update GUI when new Air Quality data arrives."""
         pm25 = data.get("PM2.5", 0)
-        
+        pm1_0 = data.get("PM1.0", None)
+        pm10  = data.get("PM10",  None)
+
         # Determine status and color based on PM2.5
         if pm25 < 12:
             status, color = "Good", "#39ff5a"
@@ -1784,7 +1866,21 @@ class DashboardWindow(QtWidgets.QMainWindow):
             status, color = "Moderate", "#f1c40f"
         else:
             status, color = "Unhealthy", "#e74c3c"
-            
+
+        # ── MQTT: publish air quality telemetry ────────────────────────────────
+        now = time.time()
+        payload_values = {
+            "airquality.pm2_5":       pm25,
+            "airquality.aqi_status":  status,
+            "airquality.timestamp":   datetime.fromtimestamp(now).isoformat(),
+        }
+        if pm1_0 is not None:
+            payload_values["airquality.pm1_0"] = pm1_0
+        if pm10 is not None:
+            payload_values["airquality.pm10"]  = pm10
+        publish_telemetry({"ts": int(now * 1000), "values": payload_values})
+        # ───────────────────────────────────────────────────────────────────────
+
         # UI update via thread-safe timer
         QtCore.QTimer.singleShot(0, lambda: self._update_air_ui(pm25, status, color))
 
@@ -1799,7 +1895,22 @@ class DashboardWindow(QtWidgets.QMainWindow):
         sensor_name = data.get("sensor", "unknown")
         is_alert = data.get("alert", False)
         distance = data.get("distance_cm", 0)
-        
+        threshold = data.get("threshold_cm", 30)
+        now = time.time()
+        now_ts_ms = int(now * 1000)
+
+        # ── MQTT: publish ultrasonic telemetry on every reading ─────────────────
+        publish_telemetry({
+            "ts": now_ts_ms,
+            "values": {
+                f"ultrasonic.{sensor_name}.distance_cm":  round(distance, 1),
+                f"ultrasonic.{sensor_name}.threshold_cm": threshold,
+                f"ultrasonic.{sensor_name}.alert":         is_alert,
+                f"ultrasonic.{sensor_name}.timestamp":     datetime.fromtimestamp(now).isoformat(),
+            }
+        })
+        # ───────────────────────────────────────────────────────────────────────
+
         if is_alert:
             # Check if this sensor is currently ignored (for 60 seconds)
             if sensor_name in self._ignored_sensors:
@@ -1810,6 +1921,21 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
             msg = f"ALERT: Object is too near on {sensor_name}! ({distance:.1f} cm)"
             print(f"[Ultrasonic] Alert triggered for {sensor_name}: {distance:.1f} cm")
+
+            # ── MQTT: publish proximity alert event ────────────────────────────
+            alert_now = time.time()
+            publish_telemetry({
+                "ts": int(alert_now * 1000),
+                "values": {
+                    "proximity_alert.sensor":       sensor_name,
+                    "proximity_alert.distance_cm":  round(distance, 1),
+                    "proximity_alert.threshold_cm": threshold,
+                    "proximity_alert.message":      msg,
+                    "proximity_alert.timestamp":    datetime.fromtimestamp(alert_now).isoformat(),
+                }
+            })
+            # ──────────────────────────────────────────────────────────────────
+
             self.proximity_alert_signal.emit(msg, False)
 
     def _handle_tamper_callback(self, data):
@@ -1823,6 +1949,22 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
         msg = f"🚨 TAMPER DETECTED: {data.get('msg', 'Device moved or shaken')}"
         print(f"[GUI DEBUG] Emitting tamper alert: {msg}")
+
+        # ── MQTT: publish tamper alert telemetry ───────────────────────────────
+        t_now = time.time()
+        publish_telemetry({
+            "ts": int(t_now * 1000),
+            "values": {
+                "tamper.event":       "TAMPER",
+                "tamper.tilt_deg":    data.get("tilt",   None),
+                "tamper.gyro_dps":    data.get("gyro",   None),
+                "tamper.linear_g":    data.get("linear", None),
+                "tamper.message":     data.get("msg",    "Device moved or shaken"),
+                "tamper.timestamp":   datetime.fromtimestamp(t_now).isoformat(),
+            }
+        })
+        # ───────────────────────────────────────────────────────────────────────
+
         self.proximity_alert_signal.emit(msg, False)
 
     def _handle_ambience_update(self, data):
@@ -1835,6 +1977,24 @@ class DashboardWindow(QtWidgets.QMainWindow):
         # Update the dialog if it's visible
         if self.ambience_dialog.isVisible():
             self.ambience_dialog.update_data(data)
+
+    def _handle_temp_update(self, data):
+        """Called when new Temperature/Humidity data arrives from the backend thread."""
+        temp = data.get("temperature")
+        hum  = data.get("humidity")
+        if temp is None and hum is None:
+            return  # Don't publish nulls
+
+        # \u2500\u2500 MQTT: publish temperature & humidity telemetry \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        now = time.time()
+        payload = {}
+        if temp is not None:
+            payload["temperature.celsius"]   = round(temp, 2)
+        if hum is not None:
+            payload["temperature.humidity_pct"] = round(hum, 2)
+        payload["temperature.timestamp"] = datetime.fromtimestamp(now).isoformat()
+        publish_telemetry({"ts": int(now * 1000), "values": payload})
+        # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     def _on_tamper_baseline_requested(self):
         """Called when user wants to set the current state as the new baseline."""
