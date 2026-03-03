@@ -16,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from core.DeviceProvision import provision
 from utility.lidar import run_detector
 from utility.ultrasonic import run_ultrasonic_check
+from utility.ambience_light import run_ambience_light_listener
 from services.telemetry_publisher import publish_telemetry, set_mqtt_token
 
 
@@ -64,6 +65,19 @@ def ultrasonic_callback(data):
     
     # Optional: You could also publish this to ThingsBoard here
     # publish_telemetry({"ts": int(time.time()*1000), "values": data})
+
+def ambience_callback(data):
+    """Publish Ambient Light data to ThingsBoard."""
+    ts = int(time.time() * 1000)
+    payload = {
+        "ts": ts,
+        "values": {
+            "ambience.lux": data.get("lux"),
+            "ambience.status": data.get("status")
+        }
+    }
+    publish_telemetry(payload)
+    # sys_log(f"📤 Ambience Light queued at {datetime.now().strftime('%H:%M:%S')}")
 
 def get_display_env():
     """
@@ -171,27 +185,39 @@ def main():
     )
     us_thread.start()
 
+    # 4b. Start Ambience Light monitoring
+    sys_log("🚀 Starting Ambience Light monitoring...")
+    ambience_thread = threading.Thread(
+        target=run_ambience_light_listener,
+        kwargs={'callback': ambience_callback},
+        daemon=True
+    )
+    ambience_thread.start()
+
     # 5. Start LiDAR collection and transmission
-    sys_log("🚀 Starting LiDAR data collection...")
+    sys_log("🚀 Starting LiDAR data collection (Left & Right)...")
+    
+    def start_lidar(side):
+        try:
+            run_detector(section_name=side, callback=lidar_callback)
+        except Exception as e:
+            sys_log(f"⚠️ LiDAR {side} Thread Error: {e}")
+
+    left_thread = threading.Thread(target=start_lidar, args=("lidar_left",), daemon=True)
+    right_thread = threading.Thread(target=start_lidar, args=("lidar_right",), daemon=True)
+    
+    left_thread.start()
+    right_thread.start()
+
     try:
-        # This will run in a loop if hardware is available
-        # If hardware is not available, it will return and we continue
-        run_detector(callback=lidar_callback)
-        
-        # If we reach here, LiDAR hardware wasn't available
-        sys_log("📡 LiDAR hardware not available, but device provisioning completed successfully!")
-        sys_log("🔄 System will continue running for other operations...")
-        
-        # Keep the program running for other potential operations
+        # Keep the main thread alive to monitor the GUI or wait for exit
         while True:
-            sys_log(f"⏰ System running without LiDAR at {datetime.now().strftime('%H:%M:%S')}")
-            
             # Check if GUI is still running
             if gui_process and gui_process.poll() is not None:
                 sys_log("🖥️ GUI has been closed by user.")
                 break
                 
-            time.sleep(30)  # Check every 30 seconds
+            time.sleep(5)
             
     except KeyboardInterrupt:
         sys_log("\n👋 System stopped by user.")
@@ -199,8 +225,7 @@ def main():
             sys_log("🔄 Closing GUI...")
             gui_process.terminate()
     except Exception as e:
-        sys_log(f"❌ Critical error in detector: {e}")
-        sys_log("🔄 But device provisioning was completed successfully!")
+        sys_log(f"❌ Critical error in main loop: {e}")
         if gui_process:
             sys_log("🔄 Closing GUI...")
             gui_process.terminate()

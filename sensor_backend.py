@@ -5,8 +5,10 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-# LiDAR sensor name shown in the GUI
-LIDAR_SENSOR_NAME = "LiDAR Distance (cm)"
+# LiDAR sensor names shown in the GUI
+LIDAR_LEFT_NAME = "LiDAR Left (cm)"
+LIDAR_RIGHT_NAME = "LiDAR Right (cm)"
+LIDAR_SENSOR_NAME = LIDAR_LEFT_NAME # Fallback for compatibility
 
 
 @dataclass
@@ -47,40 +49,49 @@ class SensorBackend:
         self._sensor_names = list(sensor_names)
         self._start_time = time.time()
         self._include_lidar = include_lidar
-        self._lidar_latest: Dict[str, Any] | None = None
+        self._lidar_left_latest: Dict[str, Any] | None = None
+        self._lidar_right_latest: Dict[str, Any] | None = None
         self._nfc_latest: Dict[str, Any] | None = None
         self._air_latest: Dict[str, Any] | None = None
         self._temp_latest: Dict[str, Any] | None = None
         self._ultrasonic_latest: Dict[str, Any] | None = None
         self._tamper_latest: Dict[str, Any] | None = None
+        self._ambience_latest: Dict[str, Any] | None = None
         self._lidar_lock = threading.Lock()
         self._nfc_lock = threading.Lock()
         self._air_lock = threading.Lock()
         self._temp_lock = threading.Lock()
         self._ultrasonic_lock = threading.Lock()
         self._tamper_lock = threading.Lock()
+        self._ambience_lock = threading.Lock()
         self._tamper_recalibrate_event = threading.Event()
-        self._lidar_thread: threading.Thread | None = None
+        self._lidar_left_thread: threading.Thread | None = None
+        self._lidar_right_thread: threading.Thread | None = None
         self._nfc_thread: threading.Thread | None = None
         self._air_thread: threading.Thread | None = None
         self._temp_thread: threading.Thread | None = None
         self._ultrasonic_thread: threading.Thread | None = None
         self._tamper_thread: threading.Thread | None = None
+        self._ambience_thread: threading.Thread | None = None
         self._nfc_callback_external = None
         self._air_callback_external = None
         self._temp_callback_external = None
         self._ultrasonic_callback_external = None
         self._tamper_callback_external = None
+        self._ambience_callback_external = None
 
         if include_lidar:
-            self._sensor_names.append(LIDAR_SENSOR_NAME)
-            self._start_lidar_thread()
+            self._sensor_names.append(LIDAR_LEFT_NAME)
+            self._sensor_names.append(LIDAR_RIGHT_NAME)
+            self._start_lidar_thread("lidar_left")
+            self._start_lidar_thread("lidar_right")
         
         self._start_nfc_thread()
         self._start_air_thread()
         self._start_temp_thread()
         self._start_ultrasonic_thread()
         self._start_tamper_thread()
+        self._start_ambience_thread()
 
     def set_nfc_callback(self, callback):
         self._nfc_callback_external = callback
@@ -96,6 +107,9 @@ class SensorBackend:
 
     def set_tamper_callback(self, callback):
         self._tamper_callback_external = callback
+
+    def set_ambience_callback(self, callback):
+        self._ambience_callback_external = callback
 
     def recalibrate_tamper(self):
         """Request the tamper monitor to set its current state as the new baseline."""
@@ -136,30 +150,50 @@ class SensorBackend:
         if self._tamper_callback_external:
             self._tamper_callback_external(data)
 
+    def _ambience_callback(self, data: Dict[str, Any]) -> None:
+        """Called by ambience_light run_ambience_light_listener."""
+        with self._ambience_lock:
+            self._ambience_latest = dict(data)
+        if self._ambience_callback_external:
+            self._ambience_callback_external(data)
+
     def _lidar_callback(self, data: Dict[str, Any]) -> None:
         """Called by lidar run_detector with each new reading."""
         if "distance_cm" not in data:
             return
+        sensor = data.get("sensor", "lidar_left")
         with self._lidar_lock:
-            self._lidar_latest = dict(data)
+            if sensor == "lidar_left":
+                self._lidar_left_latest = dict(data)
+            else:
+                self._lidar_right_latest = dict(data)
 
-    def _start_lidar_thread(self) -> None:
+    def _start_lidar_thread(self, section_name: str) -> None:
         """Run LiDAR detector in a daemon thread so the GUI stays responsive."""
         def run() -> None:
             try:
                 from utility.lidar import run_detector
-                run_detector(callback=self._lidar_callback)
+                run_detector(section_name=section_name, callback=self._lidar_callback)
             except Exception as e:
                 with self._lidar_lock:
-                    self._lidar_latest = {
+                    err_data = {
+                        "sensor": section_name,
                         "distance_cm": -1,
                         "out_of_range": True,
                         "last_updated": time.time(),
                         "_error": str(e),
                     }
+                    if section_name == "lidar_left":
+                        self._lidar_left_latest = err_data
+                    else:
+                        self._lidar_right_latest = err_data
 
-        self._lidar_thread = threading.Thread(target=run, daemon=True)
-        self._lidar_thread.start()
+        thread = threading.Thread(target=run, daemon=True)
+        if section_name == "lidar_left":
+            self._lidar_left_thread = thread
+        else:
+            self._lidar_right_thread = thread
+        thread.start()
 
     def _start_nfc_thread(self) -> None:
         """Run NFC listener in a daemon thread."""
@@ -224,6 +258,18 @@ class SensorBackend:
         self._tamper_thread = threading.Thread(target=run, daemon=True)
         self._tamper_thread.start()
 
+    def _start_ambience_thread(self) -> None:
+        """Run Ambience Light listener in a daemon thread."""
+        def run() -> None:
+            try:
+                from utility.ambience_light import run_ambience_light_listener
+                run_ambience_light_listener(callback=self._ambience_callback)
+            except Exception as e:
+                print(f"Ambience Light Thread Error: {e}")
+
+        self._ambience_thread = threading.Thread(target=run, daemon=True)
+        self._ambience_thread.start()
+
     def get_available_sensors(self) -> List[str]:
         """Return the list of available sensor names."""
         return list(self._sensor_names)
@@ -240,7 +286,7 @@ class SensorBackend:
 
         readings: Dict[str, SensorReading] = {}
         for index, name in enumerate(self._sensor_names):
-            if name == LIDAR_SENSOR_NAME:
+            if name in [LIDAR_LEFT_NAME, LIDAR_RIGHT_NAME]:
                 continue
             
             value = None
@@ -269,34 +315,37 @@ class SensorBackend:
                 timestamp=now,
             )
 
-        # LiDAR: use cached reading from background thread
+        # LiDAR: use cached reading from background threads
         if self._include_lidar:
-            with self._lidar_lock:
-                raw = self._lidar_latest
-            if raw and "distance_cm" in raw:
-                try:
-                    ts = raw.get("last_updated")
-                    if isinstance(ts, str):
-                        from datetime import datetime
-                        ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-                    elif not isinstance(ts, (int, float)):
-                        ts = now
-                    val = float(raw["distance_cm"])
-                    if raw.get("out_of_range") and (val <= 0 or val == -100):
-                        val = -1.0
-                    readings[LIDAR_SENSOR_NAME] = SensorReading(
-                        name=LIDAR_SENSOR_NAME,
-                        value=val,
-                        unit="cm",
-                        timestamp=ts,
-                    )
-                except (TypeError, ValueError):
-                    readings[LIDAR_SENSOR_NAME] = SensorReading(
-                        name=LIDAR_SENSOR_NAME,
-                        value=-1.0,
-                        unit="cm",
-                        timestamp=now,
-                    )
-
-        return readings
+            for name, raw_key in [(LIDAR_LEFT_NAME, "_lidar_left_latest"), (LIDAR_RIGHT_NAME, "_lidar_right_latest")]:
+                with self._lidar_lock:
+                    raw = getattr(self, raw_key)
+                
+                if raw and "distance_cm" in raw:
+                    try:
+                        ts = raw.get("last_updated")
+                        if isinstance(ts, str):
+                            from datetime import datetime
+                            ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                        elif not isinstance(ts, (int, float)):
+                            ts = now
+                        val = float(raw["distance_cm"])
+                        if raw.get("out_of_range") and (val <= 0 or val == -100):
+                            val = -1.0
+                        readings[name] = SensorReading(
+                            name=name,
+                            value=val,
+                            unit="cm",
+                            timestamp=ts,
+                        )
+                    except (TypeError, ValueError):
+                        readings[name] = SensorReading(
+                            name=name,
+                            value=-1.0,
+                            unit="cm",
+                            timestamp=now,
+                        )
+                else:
+                    # Initialize with null if no data yet
+                    readings[name] = SensorReading(name=name, value=-1.0, unit="cm", timestamp=now)
 

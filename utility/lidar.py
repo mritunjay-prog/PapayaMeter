@@ -67,14 +67,14 @@ def read_response(ser):
         return payload
     return None
 
-def run_detector(callback=None):
+def run_detector(section_name='lidar_left', callback=None):
     config = get_config()
     
-    port = config.get('lidar', 'serial_port', fallback='/dev/papaya_lidar')
-    baud = config.getint('lidar', 'baud_rate', fallback=115200)
-    max_range = config.getint('lidar', 'max_range_cm', fallback=500)
-    interval = config.getint('lidar', 'polling_interval_ms', fallback=100) / 1000.0
-    output_dir = config.get('lidar', 'lidar_output_path', fallback='./lidar_data/')
+    port = config.get(section_name, 'serial_port', fallback='/dev/papaya_lidar')
+    baud = config.getint(section_name, 'baud_rate', fallback=115200)
+    max_range = config.getint(section_name, 'max_range_cm', fallback=500)
+    interval = config.getint(section_name, 'polling_interval_ms', fallback=100) / 1000.0
+    output_dir = config.get(section_name, 'lidar_output_path', fallback=f'./lidar_data/{section_name}/')
     
     # Ensure directory exists
     if not os.path.exists(output_dir):
@@ -90,6 +90,7 @@ def run_detector(callback=None):
         current_time = time.time()
         if callback and (current_time - last_error_time > error_cooldown):
             error_payload = {
+                "sensor": section_name,
                 "lidar.error.type": "communication_timeout",
                 "lidar.error.code": "LD_ERR_001",
                 "lidar.error.severity": "warning",
@@ -98,11 +99,11 @@ def run_detector(callback=None):
             }
             callback(error_payload)
             last_error_time = current_time
-            print(f"⚠️ Error reported: {error_desc}")
+            print(f"⚠️ [{section_name}] Error reported: {error_desc}")
 
     try:
         ser = serial.Serial(port, baud, timeout=0.1)
-        print(f"✅ Connected to SF000/B on {port}")
+        print(f"✅ Connected to SF000/B ({section_name}) on {port}")
         
         # 1. Handshake: Request Product Name twice (Logic from lidar2.py)
         # This seems critical for initializing the session properly
@@ -114,18 +115,18 @@ def run_detector(callback=None):
         if response:
             try:
                 name = response[1:].decode('utf-8', errors='ignore').strip('\x00')
-                print(f"✅ Sensor Identified: {name}")
+                print(f"✅ Sensor [{section_name}] Identified: {name}")
             except:
                 pass
 
     except Exception as e:
         error_msg = f"Failed to open/init serial port {port}: {e}"
-        print(f"⚠️ {error_msg}")
+        print(f"⚠️ [{section_name}] {error_msg}")
         send_error(error_msg)
         return
 
     # 2. Continuous Reading Loop
-    print("🚀 Starting LiDAR data collection...")
+    print(f"🚀 Starting LiDAR [{section_name}] data collection...")
     while True:
         try:
             # Request Distance Data (ID 44)
@@ -140,7 +141,7 @@ def run_detector(callback=None):
                 try:
                     distance_cm = struct.unpack('<h', res[1:3])[0]
                 except Exception as ex:
-                    print(f"Error unpacking: {ex}")
+                    print(f"[{section_name}] Error unpacking: {ex}")
                     continue
                 
                 out_of_range = False
@@ -150,18 +151,20 @@ def run_detector(callback=None):
                 # Logic: Occupancy is detected if distance is within configured max_range
                 if not out_of_range and distance_cm <= max_range:
                     status = {
+                        "sensor": section_name,
                         "distance_cm": distance_cm,
                         "out_of_range": False,
                         "last_updated": datetime.utcnow().isoformat() + "Z"
                     }
                 else:
                     status = {
+                        "sensor": section_name,
                         "distance_cm": distance_cm if not out_of_range else -1,
                         "out_of_range": True,
                         "last_updated": datetime.utcnow().isoformat() + "Z"
                     }
                 
-                print(json.dumps(status, indent=2))
+                # print(f"[{section_name}] {json.dumps(status, indent=2)}")
                 
                 # Save to daily file (Appending)
                 try:
@@ -170,7 +173,7 @@ def run_detector(callback=None):
                     with open(full_path, 'a') as f:
                         f.write(json.dumps(status) + '\n')
                 except Exception as e:
-                    print(f"Error appending to file {filename}: {e}")
+                    print(f"Error appending to file {filename} for {section_name}: {e}")
 
                 # Send to callback
                 if callback:
@@ -179,17 +182,19 @@ def run_detector(callback=None):
                 retry_count += 1
                 # Only warn if retries pile up, to avoid spamming tight loops
                 if retry_count % 10 == 0:
-                    print(f"⚠️ LiDAR Timeout/Invalid Data (Retry {retry_count})")
+                    print(f"⚠️ LiDAR [{section_name}] Timeout/Invalid Data (Retry {retry_count})")
                 
                 if retry_count >= 50 and (retry_count % 50 == 0):
-                    send_error(f"No response from LiDAR module after {retry_count} attempts")
+                    send_error(f"No response from LiDAR [{section_name}] module after {retry_count} attempts")
 
         except Exception as e:
             retry_count += 1
-            print(f"❌ Serial Error: {e}")
+            print(f"❌ Serial Error [{section_name}]: {e}")
             time.sleep(1)
 
         time.sleep(interval)
 
 if __name__ == "__main__":
-    run_detector()
+    import sys
+    section = sys.argv[1] if len(sys.argv) > 1 else 'lidar_left'
+    run_detector(section_name=section)

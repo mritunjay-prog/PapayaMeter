@@ -32,7 +32,7 @@ FrameShape = QtWidgets.QFrame
 import time
 from datetime import datetime
 
-from sensor_backend import SensorBackend, LIDAR_SENSOR_NAME
+from sensor_backend import SensorBackend, LIDAR_LEFT_NAME, LIDAR_RIGHT_NAME, LIDAR_SENSOR_NAME
 from services.system_service import SystemService
 from services.database_service import get_db
 
@@ -708,9 +708,11 @@ class LidarMonitorDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("LiDAR Live Monitor")
-        self.setFixedSize(400, 300)
+        self.setFixedSize(450, 400) # Increased height for buttons
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
         self.setStyleSheet(f"background-color: {COLOR_BG}; color: {COLOR_TEXT_WHITE}; font-family: 'Inter', sans-serif;")
+        
+        self.selected_lidar = "left" # Default selection
         
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(30, 30, 30, 30)
@@ -718,6 +720,45 @@ class LidarMonitorDialog(QtWidgets.QDialog):
         title = QtWidgets.QLabel("📡 LIVE LiDAR STREAM")
         title.setStyleSheet(f"color: {COLOR_ACCENT_BLUE}; font-size: 16px; font-weight: bold; letter-spacing: 1px;")
         layout.addWidget(title, alignment=QtCore.Qt.AlignCenter)
+        
+        # Selection Buttons
+        sel_layout = QtWidgets.QHBoxLayout()
+        sel_layout.setSpacing(10)
+        
+        self.left_btn = QtWidgets.QPushButton("LEFT LiDAR")
+        self.left_btn.setCheckable(True)
+        self.left_btn.setChecked(True)
+        self.left_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        
+        self.right_btn = QtWidgets.QPushButton("RIGHT LiDAR")
+        self.right_btn.setCheckable(True)
+        self.right_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        
+        btn_style = """
+            QPushButton {
+                background-color: #1a222c;
+                border: 2px solid #2a323d;
+                border-radius: 8px;
+                padding: 10px;
+                color: #8a97a5;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:checked {
+                background-color: #3498db;
+                border-color: #3498db;
+                color: white;
+            }
+        """
+        self.left_btn.setStyleSheet(btn_style)
+        self.right_btn.setStyleSheet(btn_style)
+        
+        self.left_btn.clicked.connect(lambda: self._select_lidar("left"))
+        self.right_btn.clicked.connect(lambda: self._select_lidar("right"))
+        
+        sel_layout.addWidget(self.left_btn)
+        sel_layout.addWidget(self.right_btn)
+        layout.addLayout(sel_layout)
         
         layout.addStretch()
         
@@ -755,15 +796,109 @@ class LidarMonitorDialog(QtWidgets.QDialog):
         self.close_btn.clicked.connect(self.close)
         layout.addWidget(self.close_btn)
 
-    def update_value(self, value):
+    def _select_lidar(self, side):
+        self.selected_lidar = side
+        if side == "left":
+            self.left_btn.setChecked(True)
+            self.right_btn.setChecked(False)
+        else:
+            self.right_btn.setChecked(True)
+            self.left_btn.setChecked(False)
+        self.status_label.setText(f"Status: Switched to {side.upper()} LiDAR")
+
+    def update_values(self, left_val, right_val):
+        value = left_val if self.selected_lidar == "left" else right_val
+        
         if value is None or value < 0:
             self.value_label.setText("OOR")
             self.value_label.setStyleSheet("font-size: 64px; font-weight: bold; color: #e74c3c;")
-            self.status_label.setText("⚠️ Status: OUT OF RANGE")
+            self.status_label.setText(f"⚠️ Status: {self.selected_lidar.upper()} OUT OF RANGE")
         else:
             self.value_label.setText(f"{int(value)}")
             self.value_label.setStyleSheet(f"font-size: 64px; font-weight: bold; color: {COLOR_ACCENT_GREEN};")
-            self.status_label.setText("✅ Status: RECEIVING DATA")
+            self.status_label.setText(f"✅ Status: {self.selected_lidar.upper()} RECEIVING DATA")
+
+class AmbienceLightDialog(QtWidgets.QDialog):
+    """A sleek dialog to monitor Ambient Light levels."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Ambient Light Monitor")
+        self.setFixedSize(400, 350)
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+        self.setStyleSheet(f"background-color: {COLOR_BG}; color: {COLOR_TEXT_WHITE}; font-family: 'Inter', sans-serif;")
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        title = QtWidgets.QLabel("💡 AMBIENT LIGHT LEVEL")
+        title.setStyleSheet(f"color: #f1c40f; font-size: 16px; font-weight: bold; letter-spacing: 1px;")
+        layout.addWidget(title, alignment=QtCore.Qt.AlignCenter)
+        
+        layout.addStretch()
+        
+        self.lux_label = QtWidgets.QLabel("----")
+        self.lux_label.setStyleSheet("font-size: 56px; font-weight: bold; color: #f1c40f;")
+        layout.addWidget(self.lux_label, alignment=QtCore.Qt.AlignCenter)
+        
+        self.unit_label = QtWidgets.QLabel("LUX")
+        self.unit_label.setStyleSheet(f"color: {COLOR_TEXT_GRAY}; font-size: 12px; font-weight: bold;")
+        layout.addWidget(self.unit_label, alignment=QtCore.Qt.AlignCenter)
+        
+        self.status_badge = QtWidgets.QLabel("UNKNOWN")
+        self.status_badge.setStyleSheet("""
+            background-color: #2c3e50;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 10px;
+            font-weight: bold;
+            font-size: 12px;
+            margin-top: 10px;
+        """)
+        self.status_badge.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.status_badge, alignment=QtCore.Qt.AlignCenter)
+        
+        layout.addStretch()
+        
+        self.close_btn = QtWidgets.QPushButton("CLOSE MONITOR")
+        self.close_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_BORDER};
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 10px;
+                font-weight: bold;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: #3d4754;
+            }}
+        """)
+        self.close_btn.clicked.connect(self.close)
+        layout.addWidget(self.close_btn)
+
+    def update_data(self, data):
+        lux = data.get("lux")
+        status = data.get("status", "UNKNOWN")
+        
+        if lux is None:
+            self.lux_label.setText("ERR")
+            self.status_badge.setText("ERROR")
+            self.status_badge.setStyleSheet("background-color: #c0392b; color: white; padding: 4px 12px; border-radius: 10px; font-weight: bold;")
+        else:
+            self.lux_label.setText(f"{lux:.1f}")
+            self.status_badge.setText(status)
+            
+            # Change color based on status
+            if status == "DAY":
+                color = "#f1c40f" # Bright yellow
+            elif status == "TWILIGHT":
+                color = "#e67e22" # Orange
+            else:
+                color = "#34495e" # Dark blue/gray
+                
+            self.status_badge.setStyleSheet(f"background-color: {color}; color: white; padding: 4px 12px; border-radius: 10px; font-weight: bold;")
 
 class LogViewerDialog(QtWidgets.QDialog):
     """A professional terminal-style log viewer."""
@@ -1495,6 +1630,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.camera_right = CameraDialog("right", self)
         self.history_viewer = HistoryViewerDialog(self)
         self.beacon_dialog   = BeaconDialog(self)
+        self.ambience_dialog = AmbienceLightDialog(self)
 
         self._ignored_sensors = {} # Store sensor_name: timestamp
         self._last_alert_time = 0
@@ -1512,6 +1648,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.backend.set_air_callback(self._handle_air_update)
         self.backend.set_ultrasonic_callback(self._handle_ultrasonic_callback)
         self.backend.set_tamper_callback(self._handle_tamper_callback)
+        self.backend.set_ambience_callback(self._handle_ambience_update)
         
         if hasattr(self, 'notification_bar'):
             self.notification_bar.baseline_requested.connect(self._on_tamper_baseline_requested)
@@ -1665,7 +1802,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
         msg = f"🚨 TAMPER DETECTED: {data.get('msg', 'Device moved or shaken')}"
         print(f"[GUI DEBUG] Emitting tamper alert: {msg}")
-        self.proximity_alert_signal.emit(msg, True)
+        self.proximity_alert_signal.emit(msg, False)
+
+    def _handle_ambience_update(self, data):
+        """Update GUI when Ambient Light data arrives."""
+        if self.ambience_dialog.isVisible():
+            QtCore.QTimer.singleShot(0, lambda: self.ambience_dialog.update_data(data))
 
     def _on_tamper_baseline_requested(self):
         """Called when user wants to set the current state as the new baseline."""
@@ -1778,12 +1920,16 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
         # Right: Weather/Temp
         self.temp_label = QtWidgets.QLabel("🌡️ --°F")
-        self.temp_label.setStyleSheet("font-size: 14px; margin-right: 15px;")
+        self.temp_label.setStyleSheet("font-size: 14px; margin-right: 10px;")
+        
+        self.humidity_label = QtWidgets.QLabel("💧 --%")
+        self.humidity_label.setStyleSheet("font-size: 14px; margin-right: 15px;")
         
         self.aqi_label = QtWidgets.QLabel("🌬️ PM2.5: NULL")
         self.aqi_label.setStyleSheet(f"font-size: 14px; color: {COLOR_TEXT_GRAY};")
 
         layout.addWidget(self.temp_label)
+        layout.addWidget(self.humidity_label)
         layout.addWidget(self.aqi_label)
 
         return header
@@ -1918,6 +2064,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.cam_right_btn.clicked.connect(self._open_cam_right)
         btn_layout.addWidget(self.cam_right_btn)
 
+        self.ambience_btn = QtWidgets.QPushButton("💡 Ambient Light")
+        self.ambience_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.ambience_btn.setStyleSheet(f"background: {COLOR_SPOT_BG}; border: 1px solid #f1c40f; color: #f1c40f; border-radius: 5px; padding: 5px 15px; font-size: 11px; font-weight: bold;")
+        self.ambience_btn.clicked.connect(self.ambience_dialog.show)
+        btn_layout.addWidget(self.ambience_btn)
+
         for text in ["⚙️ Hi-Contrast", "🔍 Enlarge"]:
             btn = QtWidgets.QPushButton(text)
             btn.setStyleSheet(f"background: transparent; border: 1px solid {COLOR_BORDER}; border-radius: 5px; padding: 5px 15px; font-size: 11px;")
@@ -1976,7 +2128,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.battery_info_right.setText(f"{current:.3f}A")
         self.battery_info_right_r.setText(f"{current:.3f}A")
         
-        # Update Temperature from backend
+        # Update Temperature and Humidity from backend
         try:
             readings = self.backend.get_latest_readings()
             temp = readings.get("Temperature")
@@ -1986,12 +2138,24 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 self.temp_label.setText(f"🌡️ {int(f_temp)}°F")
             else:
                 self.temp_label.setText("🌡️ NULL")
+
+            # Update Humidity
+            hum = readings.get("Humidity")
+            if hum and hum.value is not None:
+                self.humidity_label.setText(f"💧 {int(hum.value)}%")
+            else:
+                self.humidity_label.setText("💧 NULL")
             
             # Update Lidar Monitor if visible
-            lidar = readings.get(LIDAR_SENSOR_NAME)
-            if lidar and self.lidar_monitor.isVisible():
-                self.lidar_monitor.update_value(lidar.value)
-        except:
+            if self.lidar_monitor.isVisible():
+                ldr_left = readings.get(LIDAR_LEFT_NAME)
+                ldr_right = readings.get(LIDAR_RIGHT_NAME)
+                self.lidar_monitor.update_values(
+                    ldr_left.value if ldr_left else -1.0,
+                    ldr_right.value if ldr_right else -1.0
+                )
+        except Exception as e:
+            # print(f"[GUI REFRESH ERROR] {e}")
             pass
 
         # Check Air Quality Status
