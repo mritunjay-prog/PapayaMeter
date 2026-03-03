@@ -17,6 +17,7 @@ from core.DeviceProvision import provision
 from utility.lidar import run_detector
 from utility.ultrasonic import run_ultrasonic_check
 from utility.ambience_light import run_ambience_light_listener
+from utility.temp_hum import run_temp_hum_listener
 from services.telemetry_publisher import publish_telemetry, set_mqtt_token
 
 
@@ -78,6 +79,22 @@ def ambience_callback(data):
     }
     publish_telemetry(payload)
     # sys_log(f"📤 Ambience Light queued at {datetime.now().strftime('%H:%M:%S')}")
+
+def temp_hum_callback(data):
+    """Publish Temperature and Humidity data to ThingsBoard."""
+    ts = int(time.time() * 1000)
+    # Convert Celsius to Fahrenheit for telemetry if desired, 
+    # but usually best to send raw and convert in dashboard.
+    # Sending raw Celsius.
+    payload = {
+        "ts": ts,
+        "values": {
+            "temperature": data.get("temperature"),
+            "humidity": data.get("humidity")
+        }
+    }
+    publish_telemetry(payload)
+    sys_log(f"📤 Temp/Hum Telemetry queued at {datetime.now().strftime('%H:%M:%S')}")
 
 def get_display_env():
     """
@@ -193,6 +210,15 @@ def main():
         daemon=True
     )
     ambience_thread.start()
+
+    # 4c. Start Temperature/Humidity monitoring
+    sys_log("🚀 Starting Temperature/Humidity monitoring...")
+    temp_hum_thread = threading.Thread(
+        target=run_temp_hum_listener,
+        kwargs={'callback': temp_hum_callback},
+        daemon=True
+    )
+    temp_hum_thread.start()
 
     # 5. Start LiDAR collection and transmission
     sys_log("🚀 Starting LiDAR data collection (Left & Right)...")

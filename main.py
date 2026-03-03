@@ -2131,6 +2131,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         # Update Temperature and Humidity from backend
         try:
             readings = self.backend.get_latest_readings()
+            # print(f"[GUI DEBUG] Sensor Readings Keys: {list(readings.keys())}")
             temp = readings.get("Temperature")
             if temp and temp.value is not None:
                 # Convert Celsius to Fahrenheit
