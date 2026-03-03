@@ -18,6 +18,7 @@ from utility.lidar import run_detector
 from utility.ultrasonic import run_ultrasonic_check
 from utility.ambience_light import run_ambience_light_listener
 from utility.temp_hum import run_temp_hum_listener
+from utility.tamper import run_tamper_monitor
 from services.telemetry_publisher import publish_telemetry, set_mqtt_token
 
 
@@ -95,6 +96,22 @@ def temp_hum_callback(data):
     }
     publish_telemetry(payload)
     sys_log(f"📤 Temp/Hum Telemetry queued at {datetime.now().strftime('%H:%M:%S')}")
+
+def tamper_callback(data):
+    """Publish Tamper data to ThingsBoard."""
+    ts = int(time.time() * 1000)
+    payload = {
+        "ts": ts,
+        "values": {
+            "tamper.event": data.get("event"),
+            "tamper.tilt": data.get("tilt"),
+            "tamper.gyro": data.get("gyro"),
+            "tamper.linear": data.get("linear"),
+            "tamper.msg": data.get("msg")
+        }
+    }
+    publish_telemetry(payload)
+    sys_log(f"🚨 [TAMPER ALERT] {data.get('msg')} | Tilt: {data.get('tilt')}")
 
 def get_display_env():
     """
@@ -219,6 +236,15 @@ def main():
         daemon=True
     )
     temp_hum_thread.start()
+
+    # 4d. Start Tamper monitoring
+    sys_log("🚀 Starting Tamper monitoring...")
+    tamper_thread = threading.Thread(
+        target=run_tamper_monitor,
+        kwargs={'callback': tamper_callback},
+        daemon=True
+    )
+    tamper_thread.start()
 
     # 5. Start LiDAR collection and transmission
     sys_log("🚀 Starting LiDAR data collection (Left & Right)...")
