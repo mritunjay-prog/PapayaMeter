@@ -46,6 +46,7 @@ class SensorBackend:
                 "Humidity",
                 "Pressure",
                 "AirQuality",
+                "Ambience",
             ]
         self._sensor_names = list(sensor_names)
         self._start_time = time.time()
@@ -309,6 +310,11 @@ class SensorBackend:
                 with self._air_lock:
                     if self._air_latest:
                         value = self._air_latest.get("PM2.5")
+            elif "ambience" in name.lower() or "lux" in name.lower():
+                unit = "Lux"
+                with self._ambience_lock:
+                    if self._ambience_latest:
+                        value = self._ambience_latest.get("lux")
             elif "press" in name.lower():
                 unit = "hPa"
                 # Keep pressure simulated for now or set to None if no hardware

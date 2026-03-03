@@ -879,27 +879,43 @@ class AmbienceLightDialog(QtWidgets.QDialog):
         self.close_btn.clicked.connect(self.close)
         layout.addWidget(self.close_btn)
 
+    def show(self):
+        """Override show to refresh data immediately from parent backend."""
+        if hasattr(self.parent(), 'backend'):
+            readings = self.parent().backend.get_latest_readings()
+            lux = readings.get("Ambience")
+            if lux and lux.value is not None:
+                self.update_data({"lux": lux.value})
+        super().show()
+
     def update_data(self, data):
         lux = data.get("lux")
-        status = data.get("status", "UNKNOWN")
+        status = data.get("status")
         
         if lux is None:
             self.lux_label.setText("ERR")
             self.status_badge.setText("ERROR")
             self.status_badge.setStyleSheet("background-color: #c0392b; color: white; padding: 4px 12px; border-radius: 10px; font-weight: bold;")
+            return
+
+        # Simple threshold logic if status is not provided (sync with utility/ambience_light.py)
+        if status is None:
+            if lux < 10.0: status = "NIGHT"
+            elif lux < 50.0: status = "TWILIGHT"
+            else: status = "DAY"
+
+        self.lux_label.setText(f"{lux:.1f}")
+        self.status_badge.setText(status)
+        
+        # Change color based on status
+        if status == "DAY":
+            color = "#f1c40f" # Bright yellow
+        elif status == "TWILIGHT":
+            color = "#e67e22" # Orange
         else:
-            self.lux_label.setText(f"{lux:.1f}")
-            self.status_badge.setText(status)
+            color = "#34495e" # Dark blue/gray (NIGHT)
             
-            # Change color based on status
-            if status == "DAY":
-                color = "#f1c40f" # Bright yellow
-            elif status == "TWILIGHT":
-                color = "#e67e22" # Orange
-            else:
-                color = "#34495e" # Dark blue/gray
-                
-            self.status_badge.setStyleSheet(f"background-color: {color}; color: white; padding: 4px 12px; border-radius: 10px; font-weight: bold;")
+        self.status_badge.setStyleSheet(f"background-color: {color}; color: white; padding: 4px 12px; border-radius: 10px; font-weight: bold;")
 
 class LogViewerDialog(QtWidgets.QDialog):
     """A professional terminal-style log viewer."""
@@ -1770,8 +1786,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
             status, color = "Unhealthy", "#e74c3c"
             
         # UI update via thread-safe timer
-        QtCore.QTimer.singleShot(0, lambda: self.aqi_label.setText(f"🌬️ PM2.5: {pm25} {status}"))
-        QtCore.QTimer.singleShot(0, lambda: self.aqi_label.setStyleSheet(f"font-size: 14px; color: {color};"))
+        QtCore.QTimer.singleShot(0, lambda: self._update_air_ui(pm25, status, color))
+
+    def _update_air_ui(self, pm25, status, color):
+        """Actual UI update for air quality."""
+        self.aqi_label.setText(f"🌬️ PM2.5: {pm25} {status}")
+        self.aqi_label.setStyleSheet(f"font-size: 14px; color: {color};")
         self._last_air_time = time.time()
 
     def _handle_ultrasonic_callback(self, data):
@@ -1806,9 +1826,15 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.proximity_alert_signal.emit(msg, False)
 
     def _handle_ambience_update(self, data):
-        """Update GUI when Ambient Light data arrives."""
+        """Update GUI when Ambient Light data arrives from background."""
+        # Update the header label immediately (it might be redundant but for callback-only systems it's good)
+        lux = data.get("lux")
+        if lux is not None:
+            self.lux_label.setText(f"☀️ {lux:.1f} Lux")
+            
+        # Update the dialog if it's visible
         if self.ambience_dialog.isVisible():
-            QtCore.QTimer.singleShot(0, lambda: self.ambience_dialog.update_data(data))
+            self.ambience_dialog.update_data(data)
 
     def _on_tamper_baseline_requested(self):
         """Called when user wants to set the current state as the new baseline."""
@@ -1929,9 +1955,13 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.aqi_label = QtWidgets.QLabel("🌬️ PM2.5: NULL")
         self.aqi_label.setStyleSheet(f"font-size: 14px; color: {COLOR_TEXT_GRAY};")
 
+        self.lux_label = QtWidgets.QLabel("☀️ -- Lux")
+        self.lux_label.setStyleSheet("font-size: 14px; margin-left: 15px;")
+
         layout.addWidget(self.temp_label)
         layout.addWidget(self.humidity_label)
         layout.addWidget(self.aqi_label)
+        layout.addWidget(self.lux_label)
 
         return header
 
@@ -2158,10 +2188,29 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 )
             
             # Update Air Quality from backend
-            aqi = readings.get("AirQuality")
-            if aqi and aqi.value is not None:
-                # Trigger internal handler used by callback for consistency
-                self._handle_air_update({"PM2.5": aqi.value})
+            aqi_reading = readings.get("AirQuality")
+            if aqi_reading and aqi_reading.value is not None:
+                # Refresh local UI state immediately to prevent "NULL" flicker
+                pm25 = aqi_reading.value
+                if pm25 < 12: status, color = "Good", "#39ff5a"
+                elif pm25 < 35: status, color = "Moderate", "#f1c40f"
+                else: status, color = "Unhealthy", "#e74c3c"
+                
+                self.aqi_label.setText(f"🌬️ PM2.5: {pm25} {status}")
+                self.aqi_label.setStyleSheet(f"font-size: 14px; color: {color};")
+                self._last_air_time = time.time()
+            
+            # Update Lux from backend
+            lux_reading = readings.get("Ambience")
+            if lux_reading and lux_reading.value is not None:
+                self.lux_label.setText(f"☀️ {lux_reading.value:.1f} Lux")
+                # Also keep dialog updated while it's open
+                if self.ambience_dialog.isVisible():
+                    # We don't have the status string in the simple reading object, 
+                    # but update_data can recalculate or handle it.
+                    self.ambience_dialog.update_data({"lux": lux_reading.value})
+            else:
+                self.lux_label.setText("☀️ -- Lux")
         except Exception as e:
             # print(f"[GUI REFRESH ERROR] {e}")
             pass
