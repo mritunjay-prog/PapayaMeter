@@ -36,8 +36,8 @@ class UltrasonicSensor:
             return None
         
         try:
-            if self.ser.in_waiting >= 4:
-                # Header byte 0xFF
+            # More robust reading: Find the 0xFF header byte
+            while self.ser.in_waiting >= 4:
                 header = self.ser.read(1)
                 if header == b'\xff':
                     data = self.ser.read(3)
@@ -50,9 +50,7 @@ class UltrasonicSensor:
                             distance_mm = (h_data << 8) + l_data
                             distance_cm = distance_mm / 10.0
                             return distance_cm
-                        else:
-                            # print(f"[{self.name}] Checksum mismatch")
-                            pass
+                # If we read something else, it was noise; loop will continue to check next byte
         except Exception as e:
             print(f"❌ Error reading from {self.name}: {e}")
         return None
@@ -95,6 +93,7 @@ def run_ultrasonic_check(callback=None):
 
     print(f"🚀 Monitoring {len(sensors)} sensor(s) (Thresholds: {[f'{s.name}: {s.threshold}cm' for s in sensors]})")
 
+    last_log_time = 0
     try:
         while True:
             for sensor in sensors:
@@ -102,7 +101,11 @@ def run_ultrasonic_check(callback=None):
                 if distance is not None:
                     # distance_mm > 0 means valid range
                     if distance > 0:
-                        # print(f"[{sensor.name}] Distance: {distance:>6.1f} cm")
+                        # Periodic status log (every 2 seconds)
+                        if time.time() - last_log_time > 2.0:
+                            print(f"📡 [Ultrasonic] {sensor.name}: {distance:.1f} cm")
+                            last_log_time = time.time()
+
                         if distance < sensor.threshold:
                             print(f"🚨 ALERT: Object is too near on {sensor.name}! (Distance: {distance:.1f} cm < Threshold: {sensor.threshold} cm)")
                         
@@ -115,7 +118,6 @@ def run_ultrasonic_check(callback=None):
                             })
                     else:
                         # Out of range / Dead zone (usually 0 or very small)
-                        # print(f"[{sensor.name}] Distance: Out of Range")
                         pass
             
             # Small sleep to manage CPU usage

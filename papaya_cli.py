@@ -53,11 +53,13 @@ def lidar_callback(data):
     publish_telemetry(payload)
     sys_log(f"📤 Telemetry queued at {datetime.now().strftime('%H:%M:%S')}")
 
+_last_us_log_time = 0
 def ultrasonic_callback(data):
     """
     Handle ultrasonic alerts in the CLI. 
     Prints alerts to terminal and logs them.
     """
+    global _last_us_log_time
     is_alert = data.get("alert", False)
     sensor_name = data.get("sensor", "unknown")
     distance = data.get("distance_cm", 0)
@@ -65,9 +67,12 @@ def ultrasonic_callback(data):
     if is_alert:
         # High visibility alert in terminal
         sys_log(f"🚨 [PROXIMITY ALERT] Object too near on {sensor_name}! Distance: {distance:.1f} cm")
-    
-    # Optional: You could also publish this to ThingsBoard here
-    # publish_telemetry({"ts": int(time.time()*1000), "values": data})
+    else:
+        # Subtle log for regular updates to show system is alive
+        now = time.time()
+        if now - _last_us_log_time > 5.0:
+            print(f"📡 [Ultrasonic Status] {sensor_name}: {distance:.1f} cm (Normal)")
+            _last_us_log_time = now
 
 def ambience_callback(data):
     """Publish Ambient Light data to ThingsBoard."""
